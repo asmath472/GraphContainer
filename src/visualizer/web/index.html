@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
 <head>
     <meta charset="utf-8" />
     <title>Graph Container Visualizer</title>
@@ -80,7 +80,7 @@
                             <h2 id="chat-title" contenteditable="true" spellcheck="false" title="Click to rename chat">
                                 New Graph Chat
                             </h2>
-                            <span class="chat-subtitle" id="chat-subtitle">Open WebUI style prototype</span>
+                            <span class="chat-subtitle" id="chat-subtitle">Query the loaded source graph</span>
                         </div>
                         <div class="chat-header-controls">
                             <select id="chat-graph-select" aria-label="Select Graph">
@@ -93,10 +93,14 @@
                                 <option value="gpt-4.1">Model: gpt-4.1</option>
                                 <option value="local-llm">Model: local-llm</option>
                             </select>
+                            <select id="chat-embedding-select" aria-label="Select Embedding Model">
+                                <option value="bge:BAAI/bge-m3">Embedding: BAAI/bge-m3</option>
+                                <option value="openai:text-embedding-3-small">Embedding: OpenAI text-embedding-3-small</option>
+                            </select>
                             <select id="chat-retrieval-select" aria-label="Select Retrieval Method">
-                                <option value="hybrid">RAG: Hybrid</option>
+                                <option value="one-hop">RAG: One-Hop</option>
                                 <option value="vector">RAG: Vector</option>
-                                <option value="graph-hop">RAG: Graph 2-Hop</option>
+                                <option value="hybrid">RAG: Hybrid</option>
                             </select>
                         </div>
                     </header>
@@ -104,7 +108,7 @@
                         <div class="msg assistant">
                             <div class="msg-role">Assistant</div>
                             <div class="msg-body">
-                                Chat mode UI is ready. Backend wiring can be connected later.
+                                Graph chat is ready. Ask a question to run retrieval and generation.
                             </div>
                         </div>
                         <div class="msg user">
@@ -115,7 +119,7 @@
                         </div>
                     </div>
                     <footer class="chat-input-wrap">
-                        <textarea id="chat-input" placeholder="메시지를 입력하세요... (현재는 UI만 추가됨)"></textarea>
+                        <textarea id="chat-input" placeholder="Enter a question for the loaded graph..."></textarea>
                         <button id="chat-send" type="button">Send</button>
                     </footer>
                 </main>

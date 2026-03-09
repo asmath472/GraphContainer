@@ -70,6 +70,7 @@ class LiveGraphVisualizer:
         self._sessions: Dict[str, _SessionState] = {}
         self._server: Optional[ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
+        self._chat_service: Optional[Any] = None
 
         self._adj_undirected: Dict[str, Set[str]] = {}
         self._incident_edges: Dict[str, List[int]] = {}
@@ -176,6 +177,18 @@ class LiveGraphVisualizer:
     def list_sessions(self) -> List[str]:
         with self._lock:
             return sorted(self._sessions.keys())
+
+    def set_chat_service(self, service: Any) -> None:
+        with self._lock:
+            self._chat_service = service
+
+    def _ensure_chat_service(self) -> Any:
+        with self._lock:
+            if self._chat_service is None:
+                from ..rag import GraphRAGService
+
+                self._chat_service = GraphRAGService(self.container, visualizer=self)
+            return self._chat_service
 
     def update_session(
         self,
@@ -530,6 +543,8 @@ class LiveGraphVisualizer:
                         {
                             "poll_interval_ms": visualizer.poll_interval_ms,
                             "default_hops": visualizer.default_hops,
+                            "chat_enabled": True,
+                            "default_chat_retrieval": "one-hop",
                         }
                     )
                     return
@@ -649,6 +664,17 @@ class LiveGraphVisualizer:
                         },
                         status=201,
                     )
+                    return
+
+                if path == "/api/chat":
+                    try:
+                        service = visualizer._ensure_chat_service()
+                        result = service.chat(payload)
+                    except Exception as exc:
+                        self._write_json({"error": str(exc)}, status=400)
+                        return
+
+                    self._write_json({"ok": True, **result})
                     return
 
                 prefix = "/api/session/"

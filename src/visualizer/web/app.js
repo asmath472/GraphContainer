@@ -25,6 +25,7 @@
 
   const chatGraphSelect = document.getElementById("chat-graph-select");
   const chatModelSelect = document.getElementById("chat-model-select");
+  const chatEmbeddingSelect = document.getElementById("chat-embedding-select");
   const chatRetrievalSelect = document.getElementById("chat-retrieval-select");
   const chatSessionListEl = document.getElementById("chat-session-list");
   const newChatBtn = document.getElementById("new-chat-btn");
@@ -83,8 +84,7 @@
   let lastSendAt = 0;
 
   const THEME_STORAGE_KEY = "graph-visualizer-theme";
-  const CHAT_PLACEHOLDER_RESPONSE =
-    "현재 채팅 모드는 UI 프로토타입입니다. 백엔드 연동은 아직 연결되지 않았습니다.";
+  const CHAT_PENDING_RESPONSE = "Thinking...";
   const DUPLICATE_SEND_WINDOW_MS = 400;
 
   function getCssVar(name, fallback = "") {
@@ -398,14 +398,14 @@
   }
 
   function buildChatSubtitle(session) {
-    return `${session.graph} · ${session.model} · ${session.retrieval}`;
+    return `${session.graph} · ${session.model} · ${session.embedding} · ${session.retrieval}`;
   }
 
   function getSessionPreview(session) {
     const lastMessage =
       [...session.messages].reverse().find((msg) => msg.role === "user") ||
       session.messages[session.messages.length - 1];
-    if (!lastMessage || !lastMessage.text) return "대화를 시작해 보세요.";
+    if (!lastMessage || !lastMessage.text) return "Start a conversation.";
     return String(lastMessage.text).replace(/\s+/g, " ").trim().slice(0, 42);
   }
 
@@ -413,6 +413,7 @@
     if (!session) return;
     if (chatGraphSelect) chatGraphSelect.value = session.graph;
     if (chatModelSelect) chatModelSelect.value = session.model;
+    if (chatEmbeddingSelect) chatEmbeddingSelect.value = session.embedding;
     if (chatRetrievalSelect) chatRetrievalSelect.value = session.retrieval;
   }
 
@@ -503,12 +504,13 @@
       title: "New Graph Chat",
       graph: (chatGraphSelect && chatGraphSelect.value) || "default",
       model: (chatModelSelect && chatModelSelect.value) || "gpt-4o",
-      retrieval: (chatRetrievalSelect && chatRetrievalSelect.value) || "hybrid",
+      embedding: (chatEmbeddingSelect && chatEmbeddingSelect.value) || "bge:BAAI/bge-m3",
+      retrieval: (chatRetrievalSelect && chatRetrievalSelect.value) || "one-hop",
       updatedAt: Date.now(),
       messages: [
         {
           role: "assistant",
-          text: "새 Graph Chat이 생성되었습니다. 메시지를 입력하면 여기에 누적됩니다.",
+          text: "A new graph chat is ready. Send a message to query the loaded graph.",
         },
       ],
     };
@@ -575,7 +577,7 @@
     renderChatSessionList();
   }
 
-  function sendChatMessage() {
+  async function sendChatMessage() {
     const text = (chatInput && chatInput.value ? chatInput.value : "").trim();
     if (!text) return;
 
@@ -592,15 +594,75 @@
       session = createChatSession({ select: true });
     }
 
+    const historyForApi = session.messages.map((message) => ({
+      role: message.role,
+      content: String(message.text || ""),
+    }));
+
     session.messages.push({ role: "user", text });
     maybeRenameNewChat(session, text);
-    session.messages.push({ role: "assistant", text: CHAT_PLACEHOLDER_RESPONSE });
+    const pendingAssistant = { role: "assistant", text: CHAT_PENDING_RESPONSE };
+    session.messages.push(pendingAssistant);
     session.updatedAt = Date.now();
 
     if (chatInput) chatInput.value = "";
     renderChatHeader(session);
     renderChatSessionList();
     renderChatThread();
+
+    try {
+      let embeddingProvider = "bge";
+      let embeddingModel = "BAAI/bge-m3";
+      if (session.embedding && typeof session.embedding === "string") {
+        const rawEmbedding = session.embedding.trim();
+        if (rawEmbedding.includes(":")) {
+          const [provider, model] = rawEmbedding.split(":", 2);
+          embeddingProvider = String(provider || embeddingProvider).trim().toLowerCase();
+          embeddingModel = String(model || embeddingModel).trim();
+        } else if (rawEmbedding) {
+          embeddingProvider = rawEmbedding.toLowerCase();
+        }
+      }
+
+      const payload = {
+        message: text,
+        graph: session.graph,
+        model: session.model,
+        retrieval: session.retrieval,
+        embedding_provider: embeddingProvider,
+        embedding_model: embeddingModel,
+        history: historyForApi,
+        top_k: 5,
+        session_id: session.vizSessionId || null,
+      };
+
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || `Request failed with status ${res.status}`);
+      }
+
+      pendingAssistant.text = String(data.answer || "");
+      if (data.session_id) {
+        session.vizSessionId = String(data.session_id);
+        currentSession = session.vizSessionId;
+        if (sessionInput) sessionInput.value = session.vizSessionId;
+        await refreshSessionView({ incremental: false });
+        startEventStream(session.vizSessionId);
+      }
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error);
+      pendingAssistant.text = `Error: ${message}`;
+    } finally {
+      session.updatedAt = Date.now();
+      renderChatHeader(session);
+      renderChatSessionList();
+      renderChatThread();
+    }
   }
 
   function initChatUi() {
@@ -619,6 +681,10 @@
     }
     if (chatModelSelect) {
       chatModelSelect.onchange = () => updateActiveChatSetting("model", chatModelSelect.value);
+    }
+    if (chatEmbeddingSelect) {
+      chatEmbeddingSelect.onchange = () =>
+        updateActiveChatSetting("embedding", chatEmbeddingSelect.value);
     }
     if (chatRetrievalSelect) {
       chatRetrievalSelect.onchange = () =>
