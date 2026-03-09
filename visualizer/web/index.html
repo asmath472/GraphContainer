@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="ko">
+<head>
+    <meta charset="utf-8" />
+    <title>Graph Container Visualizer</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+    <div id="app-shell">
+        <div id="mode-switcher">
+            <button id="mode-chat" class="mode-btn active" type="button">Chat Mode</button>
+            <button id="mode-debug" class="mode-btn" type="button">Debug Mode</button>
+        </div>
+        <button id="theme-toggle" type="button" aria-label="Toggle theme">
+            <span id="theme-toggle-label">Dark Mode</span>
+        </button>
+
+        <section id="debug-view" class="mode-view">
+            <div id="network"></div>
+
+            <div id="toolbar">
+                <div class="title">LIVE GRAPH OVERLAY</div>
+                <div class="row">
+                    <input id="session-input" placeholder="Enter Session ID..." />
+                    <button id="apply-session">Deploy</button>
+                </div>
+                <button id="clear-session" style="width:100%">Clear Session</button>
+
+                <div class="progress-container">
+                    <div id="progress-text" style="font-size: 11px; color: var(--text-dim); margin-bottom:4px;">Ready</div>
+                    <div class="progress-wrap">
+                        <div id="progress-fill"></div>
+                    </div>
+                    <div id="session-status" style="font-size: 10px; color: var(--text-dim); line-height: 1.4;">
+                        No active session
+                    </div>
+                </div>
+            </div>
+
+            <div id="sidepanel">
+                <h3>Node Intelligence</h3>
+                <pre id="node-detail">Select a node to inspect its properties.</pre>
+                <div class="display-settings">
+                    <div class="setting-item">
+                        <span>Node Labels</span>
+                        <label class="switch">
+                            <input type="checkbox" id="toggle-node-labels" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="setting-item">
+                        <span>Edge Labels</span>
+                        <label class="switch">
+                            <input type="checkbox" id="toggle-edge-labels" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div id="toggle-panel" class="panel-toggle" title="Toggle Intelligence">
+                <span id="toggle-icon">▶</span>
+            </div>
+        </section>
+
+        <section id="chat-view" class="mode-view active" aria-hidden="false">
+            <div class="chat-shell">
+                <aside class="chat-sidebar">
+                    <div class="chat-history-header">
+                        <div class="chat-sidebar-title">Graph Chats</div>
+                        <button id="new-chat-btn" class="new-chat-btn" type="button">+ New Chat</button>
+                    </div>
+                    <div id="chat-session-list" class="chat-session-list"></div>
+                </aside>
+
+                <main class="chat-main">
+                    <header class="chat-header">
+                        <div class="chat-header-main">
+                            <h2 id="chat-title" contenteditable="true" spellcheck="false" title="Click to rename chat">
+                                New Graph Chat
+                            </h2>
+                            <span class="chat-subtitle" id="chat-subtitle">Open WebUI style prototype</span>
+                        </div>
+                        <div class="chat-header-controls">
+                            <select id="chat-graph-select" aria-label="Select Graph">
+                                <option value="default">Graph: Default</option>
+                                <option value="full">Graph: Full KG</option>
+                                <option value="experiment-a">Graph: Experiment A</option>
+                            </select>
+                            <select id="chat-model-select" aria-label="Select Model">
+                                <option value="gpt-4o">Model: gpt-4o</option>
+                                <option value="gpt-4.1">Model: gpt-4.1</option>
+                                <option value="local-llm">Model: local-llm</option>
+                            </select>
+                            <select id="chat-retrieval-select" aria-label="Select Retrieval Method">
+                                <option value="hybrid">RAG: Hybrid</option>
+                                <option value="vector">RAG: Vector</option>
+                                <option value="graph-hop">RAG: Graph 2-Hop</option>
+                            </select>
+                        </div>
+                    </header>
+                    <div class="chat-thread" id="chat-thread">
+                        <div class="msg assistant">
+                            <div class="msg-role">Assistant</div>
+                            <div class="msg-body">
+                                Chat mode UI is ready. Backend wiring can be connected later.
+                            </div>
+                        </div>
+                        <div class="msg user">
+                            <div class="msg-role">You</div>
+                            <div class="msg-body">
+                                Let me ask questions against the selected graph and retrieval method.
+                            </div>
+                        </div>
+                    </div>
+                    <footer class="chat-input-wrap">
+                        <textarea id="chat-input" placeholder="메시지를 입력하세요... (현재는 UI만 추가됨)"></textarea>
+                        <button id="chat-send" type="button">Send</button>
+                    </footer>
+                </main>
+            </div>
+        </section>
+    </div>
+
+    <script src="https://unpkg.com/vis-network@9.1.9/dist/vis-network.min.js"></script>
+    <script src="/static/app.js"></script>
+
+    
+</body>
+</html>
