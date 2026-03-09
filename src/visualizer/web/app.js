@@ -84,8 +84,12 @@
   let lastSendAt = 0;
 
   const THEME_STORAGE_KEY = "graph-visualizer-theme";
-  const CHAT_PENDING_RESPONSE = "Thinking...";
+  const RETRIEVING_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  const RETRIEVING_SPINNER_INTERVAL_MS = 90;
+  const MINI_SESSION_POLL_MS = 250;
   const DUPLICATE_SEND_WINDOW_MS = 400;
+  const chatMiniRenderers = new Map();
+  let chatMessageSeq = 0;
 
   function getCssVar(name, fallback = "") {
     const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -294,8 +298,9 @@
     restartPhysics();
   }
 
-  async function fetchSessionSubgraph(sessionId) {
-    const res = await fetch(`/api/session/${sessionId}/subgraph?hops=${hops}`);
+  async function fetchSessionSubgraph(sessionId, customHops = hops) {
+    const targetHops = Number.isFinite(Number(customHops)) ? Number(customHops) : hops;
+    const res = await fetch(`/api/session/${sessionId}/subgraph?hops=${targetHops}`);
     if (!res.ok) return null;
     return await res.json();
   }
@@ -393,6 +398,140 @@
     return `chat_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
   }
 
+  function makeChatMessageId() {
+    chatMessageSeq += 1;
+    return `msg_${Date.now().toString(36)}_${chatMessageSeq.toString(36)}`;
+  }
+
+  function ensureMessageId(message) {
+    if (!message.id) {
+      message.id = makeChatMessageId();
+    }
+    return message.id;
+  }
+
+  function updateMessageBodyText(messageId, text) {
+    const body = document.getElementById(`msg-body-${messageId}`);
+    if (body) {
+      body.textContent = String(text || "");
+    }
+  }
+
+  function toMiniGraphNode(node) {
+    return {
+      id: node.id,
+      label: "",
+      title: node.label || node.id,
+      size: typeof node.size === "number" ? Math.max(5, Math.min(16, node.size)) : 10,
+      color:
+        node.color && typeof node.color === "object"
+          ? node.color
+          : {
+              background: getCssVar("--ghost-node-bg", "#6b7280"),
+              border: getCssVar("--ghost-node-border", "#9aa1ad"),
+            },
+      borderWidth: typeof node.borderWidth === "number" ? node.borderWidth : 1,
+    };
+  }
+
+  function toMiniGraphEdge(edge) {
+    return {
+      id: edge.id || `${edge.from}->${edge.to}:${edge.relation || ""}`,
+      from: edge.from,
+      to: edge.to,
+      arrows: "to",
+      width: typeof edge.width === "number" ? edge.width : 1.5,
+      color: {
+        color: getCssVar("--network-edge-color", "rgba(189, 203, 224, 0.28)"),
+        highlight: getCssVar("--accent-color", "#2f6feb"),
+      },
+      smooth: { type: "continuous" },
+    };
+  }
+
+  function ensureMiniSessionRenderer(messageId) {
+    const container = document.getElementById(`msg-mini-graph-${messageId}`);
+    if (!container) return null;
+
+    let renderer = chatMiniRenderers.get(messageId);
+    if (renderer && renderer.container === container) {
+      return renderer;
+    }
+    if (renderer && renderer.network) {
+      renderer.network.destroy();
+    }
+
+    const miniNodes = new vis.DataSet([]);
+    const miniEdges = new vis.DataSet([]);
+    const miniNetwork = new vis.Network(
+      container,
+      { nodes: miniNodes, edges: miniEdges },
+      {
+        autoResize: true,
+        interaction: { dragNodes: false, dragView: false, zoomView: false, hover: false },
+        physics: {
+          enabled: true,
+          solver: "repulsion",
+          repulsion: { nodeDistance: 70, centralGravity: 0.25 },
+          stabilization: { iterations: 80, updateInterval: 20 },
+        },
+        nodes: {
+          shape: "dot",
+          font: { size: 0 },
+        },
+        edges: {
+          arrows: { to: { enabled: true, scaleFactor: 0.45 } },
+          smooth: { type: "continuous" },
+          font: { size: 0 },
+        },
+      }
+    );
+
+    renderer = {
+      container,
+      nodes: miniNodes,
+      edges: miniEdges,
+      network: miniNetwork,
+    };
+    chatMiniRenderers.set(messageId, renderer);
+    return renderer;
+  }
+
+  function teardownMiniSessionRenderer(messageId) {
+    const renderer = chatMiniRenderers.get(messageId);
+    if (!renderer) return;
+    if (renderer.network) {
+      renderer.network.destroy();
+    }
+    chatMiniRenderers.delete(messageId);
+  }
+
+  async function renderMiniSessionSnapshot(messageId, sessionId) {
+    if (!sessionId) return;
+    const renderer = ensureMiniSessionRenderer(messageId);
+    if (!renderer) return;
+
+    const view = await fetchSessionSubgraph(sessionId, 0);
+    if (!view || !view.exists) return;
+
+    const miniNodes = (view.nodes || []).map(toMiniGraphNode);
+    const miniEdges = (view.edges || []).map(toMiniGraphEdge);
+
+    renderer.nodes.clear();
+    renderer.edges.clear();
+    if (miniNodes.length) renderer.nodes.add(miniNodes);
+    if (miniEdges.length) renderer.edges.add(miniEdges);
+
+    if (miniNodes.length) {
+      renderer.network.fit({ animation: false, padding: 14 });
+    }
+
+    const label = document.getElementById(`msg-mini-session-id-${messageId}`);
+    if (label) {
+      label.textContent = `session: ${sessionId}`;
+    }
+  }
+
   function getActiveChatSession() {
     return chatSessions.find((session) => session.id === activeChatId) || null;
   }
@@ -434,9 +573,15 @@
     chatThread.innerHTML = "";
     if (!session) return;
 
+    const renderedMessageIds = new Set();
+
     for (const message of session.messages) {
+      const messageId = ensureMessageId(message);
+      renderedMessageIds.add(messageId);
+
       const msgEl = document.createElement("div");
       msgEl.className = `msg ${message.role === "user" ? "user" : "assistant"}`;
+      msgEl.dataset.messageId = messageId;
 
       const roleEl = document.createElement("div");
       roleEl.className = "msg-role";
@@ -444,11 +589,41 @@
 
       const bodyEl = document.createElement("div");
       bodyEl.className = "msg-body";
+      bodyEl.id = `msg-body-${messageId}`;
       bodyEl.textContent = String(message.text || "");
 
       msgEl.appendChild(roleEl);
       msgEl.appendChild(bodyEl);
+
+      if (message.role === "assistant" && message.visualSessionId) {
+        const miniWrap = document.createElement("div");
+        miniWrap.className = "msg-mini-session-wrap";
+
+        const miniGraph = document.createElement("div");
+        miniGraph.className = "msg-mini-session-graph";
+        miniGraph.id = `msg-mini-graph-${messageId}`;
+
+        const miniSessionId = document.createElement("div");
+        miniSessionId.className = "msg-mini-session-id";
+        miniSessionId.id = `msg-mini-session-id-${messageId}`;
+        miniSessionId.textContent = `session: ${message.visualSessionId}`;
+
+        miniWrap.appendChild(miniGraph);
+        miniWrap.appendChild(miniSessionId);
+        msgEl.appendChild(miniWrap);
+      }
+
       chatThread.appendChild(msgEl);
+
+      if (message.role === "assistant" && message.visualSessionId) {
+        renderMiniSessionSnapshot(messageId, message.visualSessionId);
+      }
+    }
+
+    for (const existingMessageId of chatMiniRenderers.keys()) {
+      if (!renderedMessageIds.has(existingMessageId)) {
+        teardownMiniSessionRenderer(existingMessageId);
+      }
     }
 
     chatThread.scrollTop = chatThread.scrollHeight;
@@ -503,12 +678,13 @@
       id: makeChatId(),
       title: "New Graph Chat",
       graph: (chatGraphSelect && chatGraphSelect.value) || "default",
-      model: (chatModelSelect && chatModelSelect.value) || "gpt-4o",
+      model: (chatModelSelect && chatModelSelect.value) || "gpt-5-mini",
       embedding: (chatEmbeddingSelect && chatEmbeddingSelect.value) || "bge:BAAI/bge-m3",
       retrieval: (chatRetrievalSelect && chatRetrievalSelect.value) || "one-hop",
       updatedAt: Date.now(),
       messages: [
         {
+          id: makeChatMessageId(),
           role: "assistant",
           text: "A new graph chat is ready. Send a message to query the loaded graph.",
         },
@@ -599,9 +775,14 @@
       content: String(message.text || ""),
     }));
 
-    session.messages.push({ role: "user", text });
+    session.messages.push({ id: makeChatMessageId(), role: "user", text });
     maybeRenameNewChat(session, text);
-    const pendingAssistant = { role: "assistant", text: CHAT_PENDING_RESPONSE };
+    const pendingAssistant = {
+      id: makeChatMessageId(),
+      role: "assistant",
+      text: `Retrieving ${RETRIEVING_SPINNER_FRAMES[0]}`,
+      visualSessionId: session.vizSessionId || null,
+    };
     session.messages.push(pendingAssistant);
     session.updatedAt = Date.now();
 
@@ -610,7 +791,44 @@
     renderChatSessionList();
     renderChatThread();
 
+    let spinnerIndex = 0;
+    const spinnerTimer = setInterval(() => {
+      spinnerIndex = (spinnerIndex + 1) % RETRIEVING_SPINNER_FRAMES.length;
+      const nextText = `Retrieving ${RETRIEVING_SPINNER_FRAMES[spinnerIndex]}`;
+      pendingAssistant.text = nextText;
+      updateMessageBodyText(pendingAssistant.id, nextText);
+    }, RETRIEVING_SPINNER_INTERVAL_MS);
+
+    let miniPollTimer = null;
+
     try {
+      if (!session.vizSessionId) {
+        const createRes = await fetch("/api/session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            metadata: {
+              graph: session.graph,
+              model: session.model,
+              retrieval: session.retrieval,
+              embedding: session.embedding,
+            },
+          }),
+        });
+        const createData = await createRes.json().catch(() => ({}));
+        if (createRes.ok && createData.session_id) {
+          session.vizSessionId = String(createData.session_id);
+        }
+      }
+
+      if (session.vizSessionId) {
+        pendingAssistant.visualSessionId = session.vizSessionId;
+        renderChatThread();
+        miniPollTimer = setInterval(() => {
+          renderMiniSessionSnapshot(pendingAssistant.id, pendingAssistant.visualSessionId);
+        }, MINI_SESSION_POLL_MS);
+      }
+
       let embeddingProvider = "bge";
       let embeddingModel = "BAAI/bge-m3";
       if (session.embedding && typeof session.embedding === "string") {
@@ -649,6 +867,7 @@
       pendingAssistant.text = String(data.answer || "");
       if (data.session_id) {
         session.vizSessionId = String(data.session_id);
+        pendingAssistant.visualSessionId = session.vizSessionId;
         currentSession = session.vizSessionId;
         if (sessionInput) sessionInput.value = session.vizSessionId;
         await refreshSessionView({ incremental: false });
@@ -658,6 +877,10 @@
       const message = error && error.message ? error.message : String(error);
       pendingAssistant.text = `Error: ${message}`;
     } finally {
+      clearInterval(spinnerTimer);
+      if (miniPollTimer) {
+        clearInterval(miniPollTimer);
+      }
       session.updatedAt = Date.now();
       renderChatHeader(session);
       renderChatSessionList();

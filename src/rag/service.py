@@ -30,7 +30,7 @@ class GraphRAGService:
                 default_openai_model=os.getenv("GRAPH_RAG_OPENAI_EMBED_MODEL", "text-embedding-3-small"),
             )
             generator = OpenAIChatGenerator(
-                default_model=os.getenv("GRAPH_RAG_CHAT_MODEL", "gpt-4o-mini"),
+                default_model=os.getenv("GRAPH_RAG_CHAT_MODEL", "gpt-5-mini"),
             )
             pipeline = GraphRAGPipeline(
                 embedder=embedder,

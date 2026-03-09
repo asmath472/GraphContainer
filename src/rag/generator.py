@@ -25,7 +25,7 @@ class OpenAIChatGenerator:
     def __init__(
         self,
         *,
-        default_model: str = "gpt-4o-mini",
+        default_model: str = "gpt-5-mini",
         api_key: Optional[str] = None,
     ) -> None:
         try:
@@ -75,7 +75,6 @@ class OpenAIChatGenerator:
         response = self._client.chat.completions.create(
             model=target_model,
             messages=messages,
-            temperature=0.2,
         )
         output = (response.choices[0].message.content or "").strip()
         if not output:

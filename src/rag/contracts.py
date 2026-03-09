@@ -23,7 +23,7 @@ class ChatRequest:
     message: str
     history: List[ChatMessage] = field(default_factory=list)
     graph: str = "default"
-    model: str = "gpt-4o-mini"
+    model: str = "gpt-5-mini"
     retrieval: str = "one-hop"
     embedding_provider: str = "bge"
     embedding_model: str = "BAAI/bge-m3"
@@ -80,7 +80,7 @@ class ChatRequest:
             message=message,
             history=history,
             graph=str(payload.get("graph", "default")),
-            model=str(payload.get("model", "gpt-4o-mini")),
+            model=str(payload.get("model", "gpt-5-mini")),
             retrieval=str(payload.get("retrieval", "one-hop")),
             embedding_provider=embedding_provider or "bge",
             embedding_model=embedding_model or "BAAI/bge-m3",
