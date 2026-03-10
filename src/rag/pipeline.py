@@ -58,6 +58,12 @@ class GraphRAGPipeline:
             visualizer=visualizer,
         )
 
+        if visualizer is not None and request.session_id:
+            visualizer.update_session(
+                request.session_id,
+                progress={"current": 100, "total": 100, "message": "Generating answer"},
+            )
+
         answer = self.generator.generate(
             question=request.message,
             history=request.history,

@@ -30,7 +30,7 @@ class GraphRAGService:
                 default_openai_model=os.getenv("GRAPH_RAG_OPENAI_EMBED_MODEL", "text-embedding-3-small"),
             )
             generator = OpenAIChatGenerator(
-                default_model=os.getenv("GRAPH_RAG_CHAT_MODEL", "gpt-5-mini"),
+                default_model=os.getenv("GRAPH_RAG_CHAT_MODEL", "gpt-5-nano"),
             )
             pipeline = GraphRAGPipeline(
                 embedder=embedder,
@@ -102,4 +102,17 @@ class GraphRAGService:
             request=request,
             visualizer=self.visualizer,
         )
+        if self.visualizer is not None and session_id:
+            self.visualizer.update_session(
+                session_id,
+                metadata={
+                    "graph": request.graph,
+                    "model": request.model,
+                    "retrieval": request.retrieval,
+                    "embedding_provider": request.embedding_provider,
+                    "embedding_model": request.embedding_model,
+                    "llm_answer": response.answer,
+                },
+                progress={"current": 100, "total": 100, "message": "Answer generated"},
+            )
         return response.to_dict()

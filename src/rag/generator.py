@@ -25,7 +25,7 @@ class OpenAIChatGenerator:
     def __init__(
         self,
         *,
-        default_model: str = "gpt-5-mini",
+        default_model: str = "gpt-5-nano",
         api_key: Optional[str] = None,
     ) -> None:
         try:
@@ -74,8 +74,9 @@ class OpenAIChatGenerator:
 
         response = self._client.chat.completions.create(
             model=target_model,
-            messages=messages,
+            messages=messages
         )
+        print(response)  # For debugging purposes
         output = (response.choices[0].message.content or "").strip()
         if not output:
             return "I could not generate a response."

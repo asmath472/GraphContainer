@@ -35,6 +35,23 @@
                     <div id="session-status" style="font-size: 10px; color: var(--text-dim); line-height: 1.4;">
                         No active session
                     </div>
+                    <div class="replay-controls">
+                        <div class="replay-header">
+                            <span>Replay</span>
+                            <button id="debug-replay-live" type="button">Live</button>
+                        </div>
+                        <input
+                            id="debug-replay-slider"
+                            type="range"
+                            min="0"
+                            max="0"
+                            step="1"
+                            value="0"
+                            disabled
+                            aria-label="Replay retrieval progress"
+                        />
+                        <div id="debug-replay-status">No replay snapshots</div>
+                    </div>
                 </div>
             </div>
 
@@ -89,7 +106,7 @@
                                 <option value="experiment-a">Graph: Experiment A</option>
                             </select>
                             <select id="chat-model-select" aria-label="Select Model">
-                                <option value="gpt-5-mini">Model: gpt-5-mini</option>
+                                <option value="gpt-5-nano">Model: gpt-5-nano</option>
                             </select>
                             <select id="chat-embedding-select" aria-label="Select Embedding Model">
                                 <option value="bge:BAAI/bge-m3">Embedding: BAAI/bge-m3</option>

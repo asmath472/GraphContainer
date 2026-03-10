@@ -272,6 +272,47 @@ body {
   margin-top: 15px;
 }
 
+.replay-controls {
+  margin-top: 12px;
+  border-top: 1px solid var(--border-color);
+  padding-top: 10px;
+}
+
+.replay-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+#debug-replay-live {
+  background: transparent !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-main) !important;
+  border-radius: 8px;
+  padding: 4px 8px !important;
+  font-size: 11px;
+  line-height: 1.1;
+}
+
+#debug-replay-live:hover {
+  border-color: var(--accent-color) !important;
+}
+
+#debug-replay-slider {
+  width: 100%;
+  margin: 0 0 6px;
+}
+
+#debug-replay-status {
+  font-size: 10px;
+  color: var(--text-dim);
+  line-height: 1.35;
+}
+
 .progress-wrap {
   height: 6px;
   background: var(--bg-soft);
@@ -619,6 +660,7 @@ body {
 
 #chat-title {
   margin: 0;
+  margin-left: -4px;
   font-size: 20px;
   line-height: 1.15;
   min-width: 0;
@@ -656,6 +698,11 @@ body {
   font-size: 13px;
 }
 
+.msg.msg-retrieval {
+  width: min(90vw, 360px);
+  max-width: min(90vw, 360px);
+}
+
 .msg-role {
   font-size: 10px;
   text-transform: uppercase;
@@ -684,6 +731,8 @@ body {
   border-radius: 10px;
   border: 1px solid var(--border-color);
   background: rgba(15, 23, 36, 0.28);
+  width: 100%;
+  box-sizing: border-box;
 }
 
 :root[data-theme="light"] .msg-mini-session-wrap {
@@ -692,7 +741,10 @@ body {
 
 .msg-mini-session-graph {
   width: 100%;
-  height: 120px;
+  aspect-ratio: 1 / 1;
+  height: auto;
+  min-height: 220px;
+  max-height: 360px;
   border-radius: 8px;
   border: 1px solid var(--border-color);
   background: radial-gradient(circle at center, var(--network-bg-start) 0%, var(--network-bg-end) 100%);
@@ -704,6 +756,27 @@ body {
   font-family: "Fira Code", monospace;
   color: var(--text-dim);
   word-break: break-all;
+}
+
+.msg-mini-session-node-detail {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  font-family: "Fira Code", monospace;
+  color: var(--chat-assistant-text);
+  background: var(--code-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.msg-mini-session-node-detail.is-placeholder {
+  background: rgba(148, 163, 184, 0.2);
+  border-style: dashed;
+  color: var(--text-dim);
+  font-style: italic;
 }
 
 .chat-input-wrap {
