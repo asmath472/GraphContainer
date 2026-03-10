@@ -69,6 +69,18 @@
     const configRes = await fetch("/api/config");
     const config = configRes.ok ? await configRes.json() : { default_hops: 2 };
     hops = Number(config.default_hops || 2);
+
+    // Populate graph dropdown from server registry
+    if (chatGraphSelect && Array.isArray(config.graphs) && config.graphs.length) {
+      chatGraphSelect.innerHTML = "";
+      for (const g of config.graphs) {
+        const opt = document.createElement("option");
+        opt.value = g.name;
+        opt.textContent = `Graph: ${g.label || g.name}`;
+        if (g.active) opt.selected = true;
+        chatGraphSelect.appendChild(opt);
+      }
+    }
   } catch (_) {
     hops = 2;
   }
@@ -204,7 +216,7 @@
 
     try {
       localStorage.setItem(THEME_STORAGE_KEY, currentTheme);
-    } catch (_) {}
+    } catch (_) { }
 
     applyNetworkTheme();
   }
@@ -221,7 +233,7 @@
       ) {
         initialTheme = "light";
       }
-    } catch (_) {}
+    } catch (_) { }
 
     setTheme(initialTheme);
 
@@ -635,9 +647,9 @@
         node.color && typeof node.color === "object"
           ? node.color
           : {
-              background: getCssVar("--ghost-node-bg", "#6b7280"),
-              border: getCssVar("--ghost-node-border", "#9aa1ad"),
-            },
+            background: getCssVar("--ghost-node-bg", "#6b7280"),
+            border: getCssVar("--ghost-node-border", "#9aa1ad"),
+          },
       borderWidth: typeof node.borderWidth === "number" ? node.borderWidth : 1,
     };
   }
@@ -972,7 +984,11 @@
 
   function syncChatControls(session) {
     if (!session) return;
-    if (chatGraphSelect) chatGraphSelect.value = session.graph;
+    // Only set graph value if the option actually exists in the dropdown
+    if (chatGraphSelect) {
+      const opt = chatGraphSelect.querySelector(`option[value="${CSS.escape(session.graph)}"]`);
+      if (opt) chatGraphSelect.value = session.graph;
+    }
     if (chatModelSelect) chatModelSelect.value = session.model;
     if (chatEmbeddingSelect) chatEmbeddingSelect.value = session.embedding;
     if (chatRetrievalSelect) chatRetrievalSelect.value = session.retrieval;
@@ -1452,7 +1468,20 @@
     }
 
     if (chatGraphSelect) {
-      chatGraphSelect.onchange = () => updateActiveChatSetting("graph", chatGraphSelect.value);
+      chatGraphSelect.onchange = async () => {
+        const name = chatGraphSelect.value;
+        updateActiveChatSetting("graph", name);
+        // Tell the server to switch the active graph (topology + RAG backend)
+        try {
+          await fetch("/api/graph/switch", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name }),
+          });
+        } catch (_) {
+          // Non-fatal: chat will still use whichever graph is active server-side
+        }
+      };
     }
     if (chatModelSelect) {
       chatModelSelect.onchange = () => updateActiveChatSetting("model", chatModelSelect.value);

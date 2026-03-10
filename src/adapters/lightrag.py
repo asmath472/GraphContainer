@@ -138,6 +138,65 @@ class LightRAGAdapter(GraphAdapter):
         graph.edges = []
         graph._adj = {}
 
+        # ── Fast-path: when kv_store files are available, use them unconditionally
+        # for visualization (8 MB + 12 MB vs 700 MB+ vdb JSON files).
+        # Set LIGHTRAG_FORCE_VDB=1 to bypass this and load full vdb files with embeddings.
+        force_vdb = _env_bool("LIGHTRAG_FORCE_VDB", False)
+        kv_ent_file = source_path / "kv_store_full_entities.json"
+        kv_rel_file = source_path / "kv_store_full_relations.json"
+        if not force_vdb and kv_ent_file.exists() and kv_rel_file.exists():
+            with kv_ent_file.open("r", encoding="utf-8") as f:
+                kv_entities: Dict[str, Any] = json.load(f)
+            with kv_rel_file.open("r", encoding="utf-8") as f:
+                kv_relations: Dict[str, Any] = json.load(f)
+
+            # Collect unique entity names → one node each
+            seen_nodes: set = set()
+            for doc_entry in kv_entities.values():
+                for entity_name in doc_entry.get("entity_names", []):
+                    if not entity_name or entity_name in seen_nodes:
+                        continue
+                    seen_nodes.add(entity_name)
+                    graph.add_node(
+                        NodeRecord(
+                            id=str(entity_name),
+                            type="Entity",
+                            text=None,
+                            embedding=None,
+                            metadata={},
+                        )
+                    )
+
+            # Collect unique relation pairs → one edge each
+            seen_edges: set = set()
+            for doc_entry in kv_relations.values():
+                for pair in doc_entry.get("relation_pairs", []):
+                    if len(pair) != 2:
+                        continue
+                    src, tgt = str(pair[0]), str(pair[1])
+                    key = (src, tgt)
+                    if key in seen_edges:
+                        continue
+                    seen_edges.add(key)
+                    graph.add_edge(
+                        EdgeRecord(
+                            source=src,
+                            target=tgt,
+                            relation="RELATED",
+                            weight=1.0,
+                            metadata={},
+                        )
+                    )
+
+            if keep_source_reference:
+                for node in graph.nodes.values():
+                    node.metadata.setdefault("_source_path", str(source_path))
+                    node.metadata.setdefault("_source_style", "lightrag")
+
+            return graph  # type: ignore[return-value]
+
+        # ── Full-path: load vdb files (slow for large graphs, includes embeddings)
+        # Use LIGHTRAG_FORCE_VDB=1 to reach this path, or when kv_store files are absent.
         node_col = None
         edge_col = None
         db_path = os.getenv("VECTOR_STORE_PATH", "./data/database/chroma_db")

@@ -43,25 +43,39 @@ class OneHopRetriever(BaseRetriever):
                 progress={"current": 10, "total": 100, "message": "Running one-hop retrieval"},
             )
 
-        seeds = graph.search(index_name, list(query_vector), k=top_k, **kwargs)
         seed_ids: List[str] = []
         seed_score_by_id: Dict[str, Optional[float]] = {}
 
-        for item in seeds:
-            if not isinstance(item, dict):
-                continue
-            if item.get("id") is None:
-                continue
-            node_id = str(item["id"])
-            seed_ids.append(node_id)
+        if query_vector:
+            # ── Vector search path (normal) ──────────────────────────────
+            seeds = graph.search(index_name, list(query_vector), k=top_k, **kwargs)
+            for item in seeds:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("id") is None:
+                    continue
+                node_id = str(item["id"])
+                seed_ids.append(node_id)
+                raw_distance = item.get("distance")
+                score: Optional[float] = None
+                if isinstance(raw_distance, (int, float)):
+                    score = 1.0 - float(raw_distance)
+                seed_score_by_id[node_id] = score
+        else:
+            # ── Keyword fallback (no embedding available) ─────────────────
+            # Score nodes by how many query tokens appear in their id/text.
+            tokens = [t.lower() for t in query.split() if t.strip()]
+            scored: List[tuple] = []
+            for node_id, node in graph.nodes.items():
+                haystack = f"{node_id} {node.text or ''}".lower()
+                hits = sum(1 for tok in tokens if tok in haystack)
+                if hits > 0:
+                    scored.append((hits, node_id))
+            scored.sort(key=lambda x: -x[0])
+            for hits, node_id in scored[:top_k]:
+                seed_ids.append(node_id)
+                seed_score_by_id[node_id] = float(hits) / max(len(tokens), 1)
 
-            raw_distance = item.get("distance")
-            score: Optional[float] = None
-            if isinstance(raw_distance, (int, float)):
-                score = 1.0 - float(raw_distance)
-            seed_score_by_id[node_id] = score
-
-        seed_ids = _dedup_preserve_order(seed_ids)
         if visualizer is not None and session_id:
             visualizer.update_session(
                 session_id,

@@ -12,12 +12,26 @@ from .client import (
     set_progress,
     update_session,
 )
-from .live_visualizer import LiveGraphVisualizer, serve_fastinsight, serve_graph
+from .live_visualizer import (
+    LiveGraphVisualizer,
+    serve_fastinsight,
+    serve_g_retriever,
+    serve_graph,
+    serve_hipporag,
+    serve_lightrag,
+    serve_multi,
+    serve_tog,
+)
 
 __all__ = [
     "LiveGraphVisualizer",
     "serve_graph",
     "serve_fastinsight",
+    "serve_lightrag",
+    "serve_hipporag",
+    "serve_g_retriever",
+    "serve_tog",
+    "serve_multi",
     "VisualizerHTTPError",
     "LiveVisualizerClient",
     "health",
