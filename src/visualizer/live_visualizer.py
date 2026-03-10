@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import mimetypes
 import threading
 import time
 import uuid
@@ -41,6 +42,7 @@ class _SessionState:
     progress: Dict[str, Any] = field(
         default_factory=lambda: {"current": 0, "total": 0, "percent": 0.0, "message": ""}
     )
+    replay_snapshots: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class LiveGraphVisualizer:
@@ -70,6 +72,7 @@ class LiveGraphVisualizer:
         self._sessions: Dict[str, _SessionState] = {}
         self._server: Optional[ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
+        self._chat_service: Optional[Any] = None
 
         self._adj_undirected: Dict[str, Set[str]] = {}
         self._incident_edges: Dict[str, List[int]] = {}
@@ -109,6 +112,118 @@ class LiveGraphVisualizer:
             self._adj_undirected.setdefault(tgt, set()).add(src)
             self._incident_edges.setdefault(src, []).append(i)
             self._incident_edges.setdefault(tgt, []).append(i)
+
+    @staticmethod
+    def _json_clone(payload: Dict[str, Any]) -> Dict[str, Any]:
+        return json.loads(json.dumps(payload, ensure_ascii=False))
+
+    def _build_subgraph_view_locked(
+        self,
+        session_id: str,
+        state: _SessionState,
+        *,
+        hops: int,
+    ) -> Dict[str, Any]:
+        hops = max(0, int(hops))
+        seed_nodes: Set[str] = set(state.nodes.keys())
+        if not seed_nodes:
+            for edge_info in state.edges.values():
+                seed_nodes.add(str(edge_info["source"]))
+                seed_nodes.add(str(edge_info["target"]))
+
+        if not seed_nodes:
+            return {
+                "session_id": session_id,
+                "exists": True,
+                "revision": state.revision,
+                "nodes": [],
+                "edges": [],
+                "hops": hops,
+                "highlighted": {"nodes": len(state.nodes), "edges": len(state.edges)},
+                "progress": dict(state.progress),
+                "updated_at": state.updated_at,
+                "created_at": state.created_at,
+            }
+
+        selected: Set[str] = set(seed_nodes)
+        frontier: Set[str] = set(seed_nodes)
+        for _ in range(hops):
+            next_frontier: Set[str] = set()
+            for node_id in frontier:
+                next_frontier.update(self._adj_undirected.get(node_id, set()))
+            next_frontier -= selected
+            if not next_frontier:
+                break
+            selected.update(next_frontier)
+            frontier = next_frontier
+
+        for edge_info in state.edges.values():
+            selected.add(str(edge_info["source"]))
+            selected.add(str(edge_info["target"]))
+
+        node_payloads: List[Dict[str, Any]] = []
+        for node_id in sorted(selected):
+            node = self.container.get_node(node_id)
+            if node is None:
+                continue
+            payload: Dict[str, Any] = {
+                "id": node.id,
+                "label": node.id,
+                "group": node.type,
+                "title": node.id,
+                "node_type": node.type,
+                "node_text": node.text or "",
+                "node_meta": json.dumps(node.metadata, ensure_ascii=False),
+            }
+            overlay_node = state.nodes.get(node.id)
+            if overlay_node is not None:
+                payload.update(dict(overlay_node.get("style", {})))
+            node_payloads.append(payload)
+
+        candidate_edges: Set[int] = set()
+        for node_id in selected:
+            candidate_edges.update(self._incident_edges.get(node_id, []))
+
+        edge_payloads: List[Dict[str, Any]] = []
+        for edge_idx in sorted(candidate_edges):
+            edge = self.container.edges[edge_idx]
+            if edge.source not in selected or edge.target not in selected:
+                continue
+            relation = edge.relation or "RELATED"
+            payload = {
+                "id": f"g:{edge_idx}",
+                "from": edge.source,
+                "to": edge.target,
+                "label": relation,
+                "title": f"relation={relation}, weight={edge.weight}",
+                "arrows": "to",
+                "relation": relation,
+            }
+            overlay_key = _edge_overlay_key(edge.source, edge.target, relation)
+            overlay_edge = state.edges.get(overlay_key)
+            if overlay_edge is not None:
+                payload.update(dict(overlay_edge.get("style", {})))
+            edge_payloads.append(payload)
+
+        return {
+            "session_id": session_id,
+            "exists": True,
+            "revision": state.revision,
+            "hops": hops,
+            "nodes": node_payloads,
+            "edges": edge_payloads,
+            "highlighted": {"nodes": len(state.nodes), "edges": len(state.edges)},
+            "progress": dict(state.progress),
+            "updated_at": state.updated_at,
+            "created_at": state.created_at,
+        }
+
+    def _capture_replay_snapshot_locked(self, session_id: str, state: _SessionState) -> None:
+        snapshot = self._build_subgraph_view_locked(session_id, state, hops=self.default_hops)
+        state.replay_snapshots.append(self._json_clone(snapshot))
+        max_snapshots = 360
+        if len(state.replay_snapshots) > max_snapshots:
+            del state.replay_snapshots[: len(state.replay_snapshots) - max_snapshots]
 
     def _bump_revision_locked(self, state: _SessionState) -> None:
         state.revision += 1
@@ -164,6 +279,7 @@ class LiveGraphVisualizer:
                 state = self._sessions[session_id]
                 state.nodes.clear()
                 state.edges.clear()
+                state.replay_snapshots.clear()
                 self._bump_revision_locked(state)
                 self._notify_session_event_locked()
 
@@ -176,6 +292,18 @@ class LiveGraphVisualizer:
     def list_sessions(self) -> List[str]:
         with self._lock:
             return sorted(self._sessions.keys())
+
+    def set_chat_service(self, service: Any) -> None:
+        with self._lock:
+            self._chat_service = service
+
+    def _ensure_chat_service(self) -> Any:
+        with self._lock:
+            if self._chat_service is None:
+                from ..rag import GraphRAGService
+
+                self._chat_service = GraphRAGService(self.container, visualizer=self)
+            return self._chat_service
 
     def update_session(
         self,
@@ -190,6 +318,7 @@ class LiveGraphVisualizer:
             state = self._sessions.get(session_id)
             if state is None:
                 raise KeyError(f"Unknown session: {session_id}")
+            prev_percent = float(state.progress.get("percent", 0.0))
 
             if metadata:
                 state.metadata.update(metadata)
@@ -252,6 +381,11 @@ class LiveGraphVisualizer:
                 }
 
             self._bump_revision_locked(state)
+            if progress is not None:
+                next_percent = float(state.progress.get("percent", prev_percent))
+                percent_changed = abs(next_percent - prev_percent) > 1e-9
+                if percent_changed or not state.replay_snapshots:
+                    self._capture_replay_snapshot_locked(session_id, state)
             self._notify_session_event_locked()
 
     def set_progress(self, session_id: str, current: int, total: int, message: str = "") -> None:
@@ -326,96 +460,26 @@ class LiveGraphVisualizer:
                     "hops": hops,
                     "highlighted": {"nodes": 0, "edges": 0},
                 }
+            return self._build_subgraph_view_locked(session_id, state, hops=hops)
 
-            hops = max(0, int(hops))
-            seed_nodes: Set[str] = set(state.nodes.keys())
-            if not seed_nodes:
-                for edge_info in state.edges.values():
-                    seed_nodes.add(str(edge_info["source"]))
-                    seed_nodes.add(str(edge_info["target"]))
-
-            if not seed_nodes:
+    def get_session_replay(self, session_id: str) -> Dict[str, Any]:
+        with self._lock:
+            state = self._sessions.get(session_id)
+            if state is None:
                 return {
                     "session_id": session_id,
-                    "exists": True,
-                    "revision": state.revision,
-                    "nodes": [],
-                    "edges": [],
-                    "hops": hops,
-                    "highlighted": {"nodes": len(state.nodes), "edges": len(state.edges)},
-                    "progress": dict(state.progress),
+                    "exists": False,
+                    "revision": -1,
+                    "snapshots": [],
+                    "count": 0,
                 }
-
-            selected: Set[str] = set(seed_nodes)
-            frontier: Set[str] = set(seed_nodes)
-            for _ in range(hops):
-                next_frontier: Set[str] = set()
-                for node_id in frontier:
-                    next_frontier.update(self._adj_undirected.get(node_id, set()))
-                next_frontier -= selected
-                if not next_frontier:
-                    break
-                selected.update(next_frontier)
-                frontier = next_frontier
-
-            for edge_info in state.edges.values():
-                selected.add(str(edge_info["source"]))
-                selected.add(str(edge_info["target"]))
-
-            node_payloads: List[Dict[str, Any]] = []
-            for node_id in sorted(selected):
-                node = self.container.get_node(node_id)
-                if node is None:
-                    continue
-                payload: Dict[str, Any] = {
-                    "id": node.id,
-                    "label": node.id,
-                    "group": node.type,
-                    "title": node.id,
-                    "node_type": node.type,
-                    "node_text": node.text or "",
-                    "node_meta": json.dumps(node.metadata, ensure_ascii=False),
-                }
-                overlay_node = state.nodes.get(node.id)
-                if overlay_node is not None:
-                    payload.update(dict(overlay_node.get("style", {})))
-                node_payloads.append(payload)
-
-            candidate_edges: Set[int] = set()
-            for node_id in selected:
-                candidate_edges.update(self._incident_edges.get(node_id, []))
-
-            edge_payloads: List[Dict[str, Any]] = []
-            for edge_idx in sorted(candidate_edges):
-                edge = self.container.edges[edge_idx]
-                if edge.source not in selected or edge.target not in selected:
-                    continue
-                relation = edge.relation or "RELATED"
-                payload: Dict[str, Any] = {
-                    "id": f"g:{edge_idx}",
-                    "from": edge.source,
-                    "to": edge.target,
-                    "label": relation,
-                    "title": f"relation={relation}, weight={edge.weight}",
-                    "arrows": "to",
-                    "relation": relation,
-                }
-                overlay_key = _edge_overlay_key(edge.source, edge.target, relation)
-                overlay_edge = state.edges.get(overlay_key)
-                if overlay_edge is not None:
-                    payload.update(dict(overlay_edge.get("style", {})))
-                edge_payloads.append(payload)
-
             return {
                 "session_id": session_id,
                 "exists": True,
                 "revision": state.revision,
-                "hops": hops,
-                "nodes": node_payloads,
-                "edges": edge_payloads,
-                "highlighted": {"nodes": len(state.nodes), "edges": len(state.edges)},
-                "progress": dict(state.progress),
-                "updated_at": state.updated_at,
+                "hops": self.default_hops,
+                "count": len(state.replay_snapshots),
+                "snapshots": [self._json_clone(snapshot) for snapshot in state.replay_snapshots],
             }
 
     def _safe_static_path(self, rel_path: str) -> Optional[Path]:
@@ -505,20 +569,16 @@ class LiveGraphVisualizer:
                     self._write_file(index_path, "text/html; charset=utf-8")
                     return
 
-                if path == "/static/app.js":
-                    js_path = visualizer._safe_static_path("app.js")
-                    if js_path is None:
-                        self._write_json({"error": "app.js not found"}, status=500)
+                if path.startswith("/static/"):
+                    rel_path = path[len("/static/") :]
+                    static_path = visualizer._safe_static_path(rel_path)
+                    if static_path is None:
+                        self._write_json({"error": f"static file not found: {rel_path}"}, status=404)
                         return
-                    self._write_file(js_path, "application/javascript; charset=utf-8")
-                    return
-
-                if path == "/static/style.css":
-                    css_path = visualizer._safe_static_path("style.css")
-                    if css_path is None:
-                        self._write_json({"error": "style.css not found"}, status=500)
-                        return
-                    self._write_file(css_path, "text/css; charset=utf-8")
+                    content_type = mimetypes.guess_type(static_path.name)[0] or "application/octet-stream"
+                    if content_type.startswith("text/") or content_type in {"application/javascript"}:
+                        content_type = f"{content_type}; charset=utf-8"
+                    self._write_file(static_path, content_type)
                     return
 
                 if path == "/api/health":
@@ -530,6 +590,8 @@ class LiveGraphVisualizer:
                         {
                             "poll_interval_ms": visualizer.poll_interval_ms,
                             "default_hops": visualizer.default_hops,
+                            "chat_enabled": True,
+                            "default_chat_retrieval": "one-hop",
                         }
                     )
                     return
@@ -615,6 +677,18 @@ class LiveGraphVisualizer:
                         self._write_json(view)
                         return
 
+                    if rest.endswith("/replay"):
+                        session_id = rest[: -len("/replay")].strip("/")
+                        if not session_id:
+                            self._write_json({"error": "session id is required"}, status=400)
+                            return
+                        replay = visualizer.get_session_replay(session_id)
+                        if not replay.get("exists"):
+                            self._write_json(replay, status=404)
+                            return
+                        self._write_json(replay)
+                        return
+
                     session_id = rest
                     snap = visualizer.get_session_snapshot(session_id)
                     if not snap.get("exists"):
@@ -649,6 +723,17 @@ class LiveGraphVisualizer:
                         },
                         status=201,
                     )
+                    return
+
+                if path == "/api/chat":
+                    try:
+                        service = visualizer._ensure_chat_service()
+                        result = service.chat(payload)
+                    except Exception as exc:
+                        self._write_json({"error": str(exc)}, status=400)
+                        return
+
+                    self._write_json({"ok": True, **result})
                     return
 
                 prefix = "/api/session/"

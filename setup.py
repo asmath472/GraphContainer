@@ -8,5 +8,8 @@ setup(
     packages=find_packages(where="src"),
     include_package_data=True,
     python_requires=">=3.11",
-    install_requires=[],
+    install_requires=[
+        "openai>=1.108.1",
+        "python-dotenv>=1.2.1",
+    ],
 )

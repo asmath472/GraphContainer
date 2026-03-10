@@ -22,9 +22,13 @@
   const detailEl = document.getElementById("node-detail");
   const progressFill = document.getElementById("progress-fill");
   const progressText = document.getElementById("progress-text");
+  const replaySlider = document.getElementById("debug-replay-slider");
+  const replayLiveBtn = document.getElementById("debug-replay-live");
+  const replayStatusEl = document.getElementById("debug-replay-status");
 
   const chatGraphSelect = document.getElementById("chat-graph-select");
   const chatModelSelect = document.getElementById("chat-model-select");
+  const chatEmbeddingSelect = document.getElementById("chat-embedding-select");
   const chatRetrievalSelect = document.getElementById("chat-retrieval-select");
   const chatSessionListEl = document.getElementById("chat-session-list");
   const newChatBtn = document.getElementById("new-chat-btn");
@@ -83,9 +87,17 @@
   let lastSendAt = 0;
 
   const THEME_STORAGE_KEY = "graph-visualizer-theme";
-  const CHAT_PLACEHOLDER_RESPONSE =
-    "현재 채팅 모드는 UI 프로토타입입니다. 백엔드 연동은 아직 연결되지 않았습니다.";
+  const RETRIEVING_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  const GENERATING_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+  const RETRIEVING_SPINNER_INTERVAL_MS = 90;
+  const MINI_SESSION_POLL_MS = 250;
   const DUPLICATE_SEND_WINDOW_MS = 400;
+  const chatMiniRenderers = new Map();
+  const chatMiniSnapshotCache = new Map();
+  const chatMiniLayoutCache = new Map();
+  const sessionReplayHistory = new Map();
+  const replayCursorBySession = new Map();
+  let chatMessageSeq = 0;
 
   function getCssVar(name, fallback = "") {
     const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -221,7 +233,7 @@
   }
 
   function clearGraph() {
-    network.setOptions({ physics: { enabled: false } });
+    network.setOptions({ physics: { enabled: true } });
     nodes.clear();
     edges.clear();
   }
@@ -294,10 +306,23 @@
     restartPhysics();
   }
 
-  async function fetchSessionSubgraph(sessionId) {
-    const res = await fetch(`/api/session/${sessionId}/subgraph?hops=${hops}`);
+  async function fetchSessionSubgraph(sessionId, customHops = hops) {
+    const targetHops = Number.isFinite(Number(customHops)) ? Number(customHops) : hops;
+    const res = await fetch(`/api/session/${sessionId}/subgraph?hops=${targetHops}`);
     if (!res.ok) return null;
     return await res.json();
+  }
+
+  async function fetchSessionReplay(sessionId) {
+    const res = await fetch(`/api/session/${sessionId}/replay`);
+    if (!res.ok) return null;
+    return await res.json();
+  }
+
+  function normalizeSessionId(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    return raw.replace(/^session\s*:\s*/i, "").trim();
   }
 
   function updateProgressBar(progress) {
@@ -310,28 +335,216 @@
     )}%</span> - ${p.message || "Processing"}`;
   }
 
+  function cloneReplayView(view) {
+    return JSON.parse(
+      JSON.stringify({
+        nodes: view.nodes || [],
+        edges: view.edges || [],
+        progress: view.progress || {},
+        highlighted: view.highlighted || {},
+      })
+    );
+  }
+
+  function getReplayHistory(sessionId) {
+    if (!sessionReplayHistory.has(sessionId)) {
+      sessionReplayHistory.set(sessionId, []);
+    }
+    return sessionReplayHistory.get(sessionId);
+  }
+
+  function getReplayCursor(sessionId) {
+    if (!replayCursorBySession.has(sessionId)) return null;
+    return replayCursorBySession.get(sessionId);
+  }
+
+  function setReplayStatusText(value) {
+    if (!replayStatusEl) return;
+    replayStatusEl.textContent = value;
+  }
+
+  function syncReplayControls(sessionId) {
+    if (!replaySlider) return;
+    if (!sessionId) {
+      replaySlider.disabled = true;
+      replaySlider.min = "0";
+      replaySlider.max = "0";
+      replaySlider.value = "0";
+      if (replayLiveBtn) replayLiveBtn.disabled = true;
+      setReplayStatusText("No replay snapshots");
+      return;
+    }
+
+    const history = getReplayHistory(sessionId);
+    if (!history.length) {
+      replaySlider.disabled = true;
+      replaySlider.min = "0";
+      replaySlider.max = "0";
+      replaySlider.value = "0";
+      if (replayLiveBtn) replayLiveBtn.disabled = true;
+      setReplayStatusText("No replay snapshots");
+      return;
+    }
+
+    const maxIndex = history.length - 1;
+    let cursor = getReplayCursor(sessionId);
+    if (cursor !== null) {
+      cursor = Math.max(0, Math.min(maxIndex, Number(cursor)));
+      if (cursor >= maxIndex) {
+        replayCursorBySession.delete(sessionId);
+        cursor = null;
+      } else {
+        replayCursorBySession.set(sessionId, cursor);
+      }
+    }
+
+    const effectiveIndex = cursor === null ? maxIndex : cursor;
+    const entry = history[effectiveIndex];
+    const progress = entry && entry.view && entry.view.progress ? entry.view.progress : {};
+    const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+    const message = String(progress.message || "Processing");
+    const mode = cursor === null ? "Live" : "Replay";
+
+    replaySlider.disabled = history.length <= 1;
+    replaySlider.min = "0";
+    replaySlider.max = String(maxIndex);
+    replaySlider.value = String(effectiveIndex);
+    if (replayLiveBtn) replayLiveBtn.disabled = cursor === null;
+
+    setReplayStatusText(
+      `${mode} ${effectiveIndex + 1}/${history.length} · ${percent.toFixed(1)}% · ${message}`
+    );
+  }
+
+  function recordReplaySnapshot(sessionId, view) {
+    if (!sessionId || !view) return;
+    const history = getReplayHistory(sessionId);
+    const snapshot = cloneReplayView(view);
+    const last = history.length ? history[history.length - 1] : null;
+    const currentProgress = snapshot.progress || {};
+    const currentPercent = Number(currentProgress.percent || 0);
+
+    if (last) {
+      const lastProgress = (last.view && last.view.progress) || {};
+      const lastPercent = Number(lastProgress.percent || 0);
+      if (Math.abs(currentPercent - lastPercent) < 0.0001) {
+        return;
+      }
+    }
+
+    history.push({
+      ts: Date.now(),
+      view: snapshot,
+    });
+
+    const maxSnapshots = 240;
+    if (history.length > maxSnapshots) {
+      const removed = history.length - maxSnapshots;
+      history.splice(0, removed);
+      const cursor = getReplayCursor(sessionId);
+      if (cursor !== null) {
+        replayCursorBySession.set(sessionId, Math.max(0, Number(cursor) - removed));
+      }
+    }
+  }
+
+  function loadReplayHistory(sessionId, snapshots) {
+    if (!sessionId) return;
+    if (!Array.isArray(snapshots)) return;
+    const history = [];
+    for (let i = 0; i < snapshots.length; i += 1) {
+      const frame = snapshots[i];
+      if (!frame || typeof frame !== "object") continue;
+      const ts =
+        typeof frame.updated_at === "number" && Number.isFinite(frame.updated_at)
+          ? Math.floor(frame.updated_at * 1000)
+          : Date.now() + i;
+      history.push({
+        ts,
+        view: cloneReplayView(frame),
+      });
+    }
+    sessionReplayHistory.set(sessionId, history);
+  }
+
+  function applyReplayEntry(sessionId, index) {
+    if (!sessionId) return;
+    const history = getReplayHistory(sessionId);
+    if (!history.length) return;
+    const safeIndex = Math.max(0, Math.min(history.length - 1, Number(index)));
+    const entry = history[safeIndex];
+    if (!entry || !entry.view) return;
+
+    applySubgraph(entry.view, { incremental: false });
+    applyGhostStyleToVisibleNodes();
+    updateProgressBar(entry.view.progress);
+
+    const nodeCount = (entry.view.nodes || []).length;
+    const edgeCount = (entry.view.edges || []).length;
+    statusEl.textContent =
+      `session=${sessionId} | replay ${safeIndex + 1}/${history.length} | ` +
+      `nodes=${nodeCount}, edges=${edgeCount}`;
+
+    syncReplayControls(sessionId);
+  }
+
+  function showLatestReplay(sessionId, { incremental = false } = {}) {
+    if (!sessionId) return;
+    const history = getReplayHistory(sessionId);
+    if (!history.length) return;
+    replayCursorBySession.delete(sessionId);
+    const latest = history[history.length - 1];
+    if (!latest || !latest.view) return;
+
+    applySubgraph(latest.view, { incremental });
+    applyGhostStyleToVisibleNodes();
+    updateProgressBar(latest.view.progress);
+
+    const nodeCount = (latest.view.nodes || []).length;
+    const edgeCount = (latest.view.edges || []).length;
+    const hNodeCount = ((latest.view.highlighted || {}).nodes || 0);
+    const hEdgeCount = ((latest.view.highlighted || {}).edges || 0);
+    statusEl.textContent =
+      `session=${sessionId} | displayed(${hops}-hop) nodes=${nodeCount}, edges=${edgeCount} | ` +
+      `highlighted nodes=${hNodeCount}, edges=${hEdgeCount}`;
+
+    syncReplayControls(sessionId);
+  }
+
   async function refreshSessionView({ incremental = false } = {}) {
     if (!currentSession) return;
     const view = await fetchSessionSubgraph(currentSession);
-    if (!view) return;
+    if (!view) {
+      statusEl.textContent = `session=${currentSession} fetch failed`;
+      return;
+    }
     if (!view.exists) {
       clearGraph();
       statusEl.textContent = `session ${currentSession} not found`;
       updateProgressBar({ percent: 0, current: 0, total: 0, message: "session not found" });
+      syncReplayControls(currentSession);
       return;
     }
 
-    applySubgraph(view, { incremental });
-    applyGhostStyleToVisibleNodes();
-    updateProgressBar(view.progress);
+    const replay = await fetchSessionReplay(currentSession);
+    if (replay && replay.exists && Array.isArray(replay.snapshots)) {
+      loadReplayHistory(currentSession, replay.snapshots);
+    } else {
+      recordReplaySnapshot(currentSession, view);
+    }
+    let history = getReplayHistory(currentSession);
+    if (!history.length) {
+      recordReplaySnapshot(currentSession, view);
+      history = getReplayHistory(currentSession);
+    }
+    const cursor = getReplayCursor(currentSession);
+    const hasReplayCursor = cursor !== null && Number(cursor) < history.length - 1;
+    if (hasReplayCursor) {
+      applyReplayEntry(currentSession, cursor);
+      return;
+    }
 
-    const nodeCount = (view.nodes || []).length;
-    const edgeCount = (view.edges || []).length;
-    const hNodeCount = ((view.highlighted || {}).nodes || 0);
-    const hEdgeCount = ((view.highlighted || {}).edges || 0);
-    statusEl.textContent =
-      `session=${currentSession} | displayed(${hops}-hop) nodes=${nodeCount}, edges=${edgeCount} | ` +
-      `highlighted nodes=${hNodeCount}, edges=${hEdgeCount}`;
+    showLatestReplay(currentSession, { incremental });
   }
 
   function stopEventStream() {
@@ -393,19 +606,367 @@
     return `chat_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
   }
 
+  function makeChatMessageId() {
+    chatMessageSeq += 1;
+    return `msg_${Date.now().toString(36)}_${chatMessageSeq.toString(36)}`;
+  }
+
+  function ensureMessageId(message) {
+    if (!message.id) {
+      message.id = makeChatMessageId();
+    }
+    return message.id;
+  }
+
+  function updateMessageBodyText(messageId, text) {
+    const body = document.getElementById(`msg-body-${messageId}`);
+    if (body) {
+      body.textContent = String(text || "");
+    }
+  }
+
+  function toMiniGraphNode(node) {
+    return {
+      id: node.id,
+      label: "",
+      title: node.label || node.id,
+      size: typeof node.size === "number" ? Math.max(5, Math.min(16, node.size)) : 10,
+      color:
+        node.color && typeof node.color === "object"
+          ? node.color
+          : {
+              background: getCssVar("--ghost-node-bg", "#6b7280"),
+              border: getCssVar("--ghost-node-border", "#9aa1ad"),
+            },
+      borderWidth: typeof node.borderWidth === "number" ? node.borderWidth : 1,
+    };
+  }
+
+  function toMiniGraphEdge(edge) {
+    return {
+      id: edge.id || `${edge.from}->${edge.to}:${edge.relation || ""}`,
+      from: edge.from,
+      to: edge.to,
+      arrows: "to",
+      width: typeof edge.width === "number" ? edge.width : 1.5,
+      color: {
+        color: getCssVar("--network-edge-color", "rgba(189, 203, 224, 0.28)"),
+        highlight: getCssVar("--accent-color", "#2f6feb"),
+      },
+      smooth: { type: "continuous" },
+    };
+  }
+
+  function getMiniSnapshotStage(progress) {
+    const message = String((progress && progress.message) || "").toLowerCase();
+    if (message.includes("answer generated")) return "generated";
+    if (message.includes("generating")) return "generating";
+    if (message.includes("retrieval complete")) return "retrieved";
+    return "retrieving";
+  }
+
+  function buildMiniSnapshotSignature(view) {
+    const progress = view.progress || {};
+    const progressMessage = String(progress.message || "");
+    const nodeSnapshotSig = (view.nodes || []).map((node) => String(node.id)).join("|");
+    const edgeSnapshotSig = (view.edges || [])
+      .map((edge) => `${String(edge.from)}>${String(edge.to)}:${String(edge.relation || "")}`)
+      .join("|");
+    return `${progressMessage}::${nodeSnapshotSig}::${edgeSnapshotSig}`;
+  }
+
+  function cacheMiniRendererLayout(messageId, renderer) {
+    if (!renderer || !renderer.network || !renderer.nodes) return;
+    const nodeIds = renderer.nodes.getIds();
+    if (!nodeIds.length) return;
+    let positions = {};
+    try {
+      positions = renderer.network.getPositions(nodeIds);
+    } catch (_) {
+      return;
+    }
+    const viewPosition =
+      typeof renderer.network.getViewPosition === "function" ? renderer.network.getViewPosition() : null;
+    const scale = typeof renderer.network.getScale === "function" ? renderer.network.getScale() : null;
+    chatMiniLayoutCache.set(messageId, {
+      positions,
+      viewPosition,
+      scale,
+    });
+  }
+
+  function ensureMiniSessionRenderer(messageId) {
+    const container = document.getElementById(`msg-mini-graph-${messageId}`);
+    if (!container) return null;
+
+    let renderer = chatMiniRenderers.get(messageId);
+    if (renderer && renderer.container === container) {
+      return renderer;
+    }
+    if (renderer && renderer.network) {
+      cacheMiniRendererLayout(messageId, renderer);
+      renderer.network.destroy();
+    }
+
+    const miniNodes = new vis.DataSet([]);
+    const miniEdges = new vis.DataSet([]);
+    const miniNetwork = new vis.Network(
+      container,
+      { nodes: miniNodes, edges: miniEdges },
+      {
+        autoResize: true,
+        interaction: { dragNodes: false, dragView: true, zoomView: true, hover: true },
+        physics: {
+          enabled: true,
+          solver: "repulsion",
+          repulsion: { nodeDistance: 70, centralGravity: 0.25 },
+          stabilization: { iterations: 80, updateInterval: 20 },
+        },
+        nodes: {
+          shape: "dot",
+          font: { size: 0 },
+        },
+        edges: {
+          arrows: { to: { enabled: true, scaleFactor: 0.45 } },
+          smooth: { type: "continuous" },
+          font: { size: 0 },
+        },
+      }
+    );
+
+    renderer = {
+      container,
+      nodes: miniNodes,
+      edges: miniEdges,
+      network: miniNetwork,
+      nodePayloadById: new Map(),
+      selectedNodeId: null,
+      hasInitialView: false,
+      lastLayoutSignature: "",
+      lastSnapshotSignature: "",
+      frozenAfterRetrieval: false,
+    };
+    miniNetwork.on("click", (params) => {
+      if (!params.nodes.length) {
+        renderer.selectedNodeId = null;
+        renderMiniNodeDetail(messageId, null);
+        return;
+      }
+      const nodeId = params.nodes[0];
+      renderer.selectedNodeId = nodeId;
+      renderMiniNodeDetail(messageId, renderer.nodePayloadById.get(nodeId) || null);
+    });
+    chatMiniRenderers.set(messageId, renderer);
+    return renderer;
+  }
+
+  function teardownMiniSessionRenderer(messageId) {
+    const renderer = chatMiniRenderers.get(messageId);
+    if (!renderer) return;
+    if (renderer.network) {
+      cacheMiniRendererLayout(messageId, renderer);
+      renderer.network.destroy();
+    }
+    chatMiniRenderers.delete(messageId);
+  }
+
+  async function renderMiniSessionSnapshot(messageId, sessionId, { allowFetch = true } = {}) {
+    if (!sessionId) return;
+    const renderer = ensureMiniSessionRenderer(messageId);
+    if (!renderer) return;
+
+    const applyViewToRenderer = (view, signature, { liveUpdate = false, stage = "retrieving" } = {}) => {
+      renderer.lastSnapshotSignature = signature;
+      renderer.frozenAfterRetrieval = stage !== "retrieving";
+
+      renderer.nodePayloadById.clear();
+      for (const rawNode of view.nodes || []) {
+        if (!rawNode || rawNode.id === undefined || rawNode.id === null) continue;
+        renderer.nodePayloadById.set(rawNode.id, rawNode);
+      }
+
+      const miniNodes = (view.nodes || []).map(toMiniGraphNode);
+      const miniEdges = (view.edges || []).map(toMiniGraphEdge);
+
+      const currentNodeIds = renderer.nodes.getIds();
+      const currentPositions = currentNodeIds.length
+        ? renderer.network.getPositions(currentNodeIds)
+        : {};
+      const cachedLayout = chatMiniLayoutCache.get(messageId);
+      const cachedPositions =
+        cachedLayout && cachedLayout.positions && typeof cachedLayout.positions === "object"
+          ? cachedLayout.positions
+          : {};
+
+      let anchorX = 0;
+      let anchorY = 0;
+      let anchorCount = 0;
+      for (const pos of Object.values(currentPositions)) {
+        if (!pos) continue;
+        if (!Number.isFinite(pos.x) || !Number.isFinite(pos.y)) continue;
+        anchorX += pos.x;
+        anchorY += pos.y;
+        anchorCount += 1;
+      }
+      if (!anchorCount) {
+        for (const pos of Object.values(cachedPositions)) {
+          if (!pos) continue;
+          if (!Number.isFinite(pos.x) || !Number.isFinite(pos.y)) continue;
+          anchorX += pos.x;
+          anchorY += pos.y;
+          anchorCount += 1;
+        }
+      }
+      const anchor =
+        anchorCount > 0 ? { x: anchorX / anchorCount, y: anchorY / anchorCount } : null;
+
+      const patchedMiniNodes = miniNodes.map((node) => {
+        const knownPos = currentPositions[node.id] || cachedPositions[node.id];
+        if (knownPos && Number.isFinite(knownPos.x) && Number.isFinite(knownPos.y)) {
+          return {
+            ...node,
+            x: knownPos.x,
+            y: knownPos.y,
+          };
+        }
+        if (anchor) {
+          return {
+            ...node,
+            x: anchor.x,
+            y: anchor.y,
+          };
+        }
+        return node;
+      });
+
+      const nextNodeIds = new Set(patchedMiniNodes.map((node) => node.id));
+      const removedNodeIds = currentNodeIds.filter((id) => !nextNodeIds.has(id));
+      if (removedNodeIds.length) renderer.nodes.remove(removedNodeIds);
+      if (patchedMiniNodes.length) renderer.nodes.update(patchedMiniNodes);
+
+      const currentEdgeIds = renderer.edges.getIds();
+      const nextEdgeIds = new Set(miniEdges.map((edge) => edge.id));
+      const removedEdgeIds = currentEdgeIds.filter((id) => !nextEdgeIds.has(id));
+      if (removedEdgeIds.length) renderer.edges.remove(removedEdgeIds);
+      if (miniEdges.length) renderer.edges.update(miniEdges);
+
+      const nextLayoutSignature = `${patchedMiniNodes.length}:${miniEdges.length}`;
+      if (patchedMiniNodes.length && !renderer.hasInitialView) {
+        if (cachedLayout && cachedLayout.viewPosition && Number.isFinite(cachedLayout.scale)) {
+          renderer.network.moveTo({
+            position: cachedLayout.viewPosition,
+            scale: cachedLayout.scale,
+            animation: false,
+          });
+        } else {
+          renderer.network.fit({ animation: false, padding: 26 });
+          renderer.network.moveTo({ scale: 0.72, animation: false });
+        }
+        renderer.hasInitialView = true;
+        renderer.lastLayoutSignature = nextLayoutSignature;
+      }
+
+      if (liveUpdate) {
+        renderer.network.setOptions({
+          physics: {
+            enabled: true,
+            solver: "repulsion",
+            repulsion: { nodeDistance: 70, centralGravity: 0.25 },
+            stabilization: { iterations: 80, updateInterval: 20 },
+          },
+        });
+        if (typeof renderer.network.stabilize === "function") {
+          renderer.network.stabilize(40);
+        }
+      }
+      renderer.network.setOptions({ physics: { enabled: true } });
+
+      const updatedNodeIds = renderer.nodes.getIds();
+      if (updatedNodeIds.length) {
+        chatMiniLayoutCache.set(messageId, {
+          positions: renderer.network.getPositions(updatedNodeIds),
+          viewPosition:
+            typeof renderer.network.getViewPosition === "function"
+              ? renderer.network.getViewPosition()
+              : null,
+          scale: typeof renderer.network.getScale === "function" ? renderer.network.getScale() : null,
+        });
+      }
+
+      if (renderer.selectedNodeId && renderer.nodePayloadById.has(renderer.selectedNodeId)) {
+        renderer.network.selectNodes([renderer.selectedNodeId]);
+        renderMiniNodeDetail(messageId, renderer.nodePayloadById.get(renderer.selectedNodeId));
+      } else {
+        renderer.selectedNodeId = null;
+        renderMiniNodeDetail(messageId, null);
+      }
+
+      const label = document.getElementById(`msg-mini-session-id-${messageId}`);
+      if (label) {
+        label.textContent = `session: ${sessionId}`;
+      }
+    };
+
+    const cached = chatMiniSnapshotCache.get(messageId);
+    if (cached && cached.sessionId === sessionId) {
+      if (renderer.lastSnapshotSignature !== cached.signature) {
+        applyViewToRenderer(cached.view, cached.signature, {
+          liveUpdate: false,
+          stage: cached.stage,
+        });
+      }
+      if (!allowFetch || cached.frozen) {
+        return { stage: cached.stage, progress: cached.view.progress || {} };
+      }
+    } else if (!allowFetch) {
+      return;
+    }
+
+    const view = await fetchSessionSubgraph(sessionId, 0);
+    if (!view || !view.exists) return;
+
+    const progress = view.progress || {};
+    const stage = getMiniSnapshotStage(progress);
+    const signature = buildMiniSnapshotSignature(view);
+    if (renderer.lastSnapshotSignature === signature) {
+      return { stage, progress };
+    }
+
+    applyViewToRenderer(view, signature, {
+      liveUpdate: stage === "retrieving",
+      stage,
+    });
+
+    chatMiniSnapshotCache.set(messageId, {
+      sessionId,
+      signature,
+      stage,
+      frozen: stage !== "retrieving",
+      view: JSON.parse(
+        JSON.stringify({
+          nodes: view.nodes || [],
+          edges: view.edges || [],
+          progress: view.progress || {},
+        })
+      ),
+    });
+
+    return { stage, progress };
+  }
+
   function getActiveChatSession() {
     return chatSessions.find((session) => session.id === activeChatId) || null;
   }
 
   function buildChatSubtitle(session) {
-    return `${session.graph} · ${session.model} · ${session.retrieval}`;
+    return `${session.graph} · ${session.model} · ${session.embedding} · ${session.retrieval}`;
   }
 
   function getSessionPreview(session) {
     const lastMessage =
       [...session.messages].reverse().find((msg) => msg.role === "user") ||
       session.messages[session.messages.length - 1];
-    if (!lastMessage || !lastMessage.text) return "대화를 시작해 보세요.";
+    if (!lastMessage || !lastMessage.text) return "Start a conversation.";
     return String(lastMessage.text).replace(/\s+/g, " ").trim().slice(0, 42);
   }
 
@@ -413,6 +974,7 @@
     if (!session) return;
     if (chatGraphSelect) chatGraphSelect.value = session.graph;
     if (chatModelSelect) chatModelSelect.value = session.model;
+    if (chatEmbeddingSelect) chatEmbeddingSelect.value = session.embedding;
     if (chatRetrievalSelect) chatRetrievalSelect.value = session.retrieval;
   }
 
@@ -427,27 +989,120 @@
     chatSubtitleEl.textContent = buildChatSubtitle(session);
   }
 
+  function ensureElement(parent, selector, tagName, className) {
+    let el = parent.querySelector(selector);
+    if (el) return el;
+    el = document.createElement(tagName);
+    el.className = className;
+    parent.appendChild(el);
+    return el;
+  }
+
+  function dropMiniMessageState(messageId) {
+    teardownMiniSessionRenderer(messageId);
+    chatMiniSnapshotCache.delete(messageId);
+    chatMiniLayoutCache.delete(messageId);
+  }
+
+  function dropMiniStateForSession(session) {
+    if (!session || !Array.isArray(session.messages)) return;
+    for (const message of session.messages) {
+      const messageId = message && message.id ? String(message.id) : "";
+      if (!messageId) continue;
+      dropMiniMessageState(messageId);
+    }
+  }
+
+  function syncChatMessageElement(message) {
+    const messageId = ensureMessageId(message);
+    const roleClass = message.role === "user" ? "user" : "assistant";
+    const kindClass = message.kind ? ` msg-${message.kind}` : "";
+    let msgEl = chatThread.querySelector(`.msg[data-message-id="${messageId}"]`);
+    if (!msgEl) {
+      msgEl = document.createElement("div");
+      msgEl.dataset.messageId = messageId;
+    }
+    msgEl.className = `msg ${roleClass}${kindClass}`;
+
+    const roleEl = ensureElement(msgEl, ".msg-role", "div", "msg-role");
+    roleEl.textContent = message.role === "user" ? "You" : "Assistant";
+
+    const bodyEl = ensureElement(msgEl, `.msg-body#msg-body-${messageId}`, "div", "msg-body");
+    bodyEl.id = `msg-body-${messageId}`;
+    bodyEl.textContent = String(message.text || "");
+
+    const hasMiniGraph = message.role === "assistant" && Boolean(message.visualSessionId);
+    let miniWrap = msgEl.querySelector(".msg-mini-session-wrap");
+    if (hasMiniGraph) {
+      if (!miniWrap) {
+        miniWrap = document.createElement("div");
+        miniWrap.className = "msg-mini-session-wrap";
+
+        const miniGraph = document.createElement("div");
+        miniGraph.className = "msg-mini-session-graph";
+        miniGraph.id = `msg-mini-graph-${messageId}`;
+
+        const miniSessionId = document.createElement("div");
+        miniSessionId.className = "msg-mini-session-id";
+        miniSessionId.id = `msg-mini-session-id-${messageId}`;
+        miniSessionId.textContent = `session: ${message.visualSessionId}`;
+
+        const miniNodeDetail = document.createElement("pre");
+        miniNodeDetail.className = "msg-mini-session-node-detail is-placeholder";
+        miniNodeDetail.id = `msg-mini-node-detail-${messageId}`;
+        miniNodeDetail.textContent = "Click a node to inspect node text and metadata.";
+
+        miniWrap.appendChild(miniGraph);
+        miniWrap.appendChild(miniSessionId);
+        miniWrap.appendChild(miniNodeDetail);
+        msgEl.appendChild(miniWrap);
+      }
+    } else if (miniWrap) {
+      miniWrap.remove();
+      teardownMiniSessionRenderer(messageId);
+    }
+
+    return msgEl;
+  }
+
   function renderChatThread() {
     if (!chatThread) return;
     const session = getActiveChatSession();
-    chatThread.innerHTML = "";
-    if (!session) return;
+    if (!session) {
+      const existing = chatThread.querySelectorAll(".msg[data-message-id]");
+      for (const el of existing) {
+        const messageId = el.dataset.messageId || "";
+        if (messageId) teardownMiniSessionRenderer(messageId);
+      }
+      chatThread.innerHTML = "";
+      return;
+    }
+
+    const renderedMessageIds = new Set();
 
     for (const message of session.messages) {
-      const msgEl = document.createElement("div");
-      msgEl.className = `msg ${message.role === "user" ? "user" : "assistant"}`;
-
-      const roleEl = document.createElement("div");
-      roleEl.className = "msg-role";
-      roleEl.textContent = message.role === "user" ? "You" : "Assistant";
-
-      const bodyEl = document.createElement("div");
-      bodyEl.className = "msg-body";
-      bodyEl.textContent = String(message.text || "");
-
-      msgEl.appendChild(roleEl);
-      msgEl.appendChild(bodyEl);
+      const messageId = ensureMessageId(message);
+      renderedMessageIds.add(messageId);
+      const msgEl = syncChatMessageElement(message);
       chatThread.appendChild(msgEl);
+
+      if (message.role === "assistant" && message.visualSessionId) {
+        renderMiniSessionSnapshot(messageId, message.visualSessionId, { allowFetch: false });
+      }
+    }
+
+    const existingMessageEls = chatThread.querySelectorAll(".msg[data-message-id]");
+    for (const el of existingMessageEls) {
+      const messageId = el.dataset.messageId || "";
+      if (!messageId || renderedMessageIds.has(messageId)) continue;
+      teardownMiniSessionRenderer(messageId);
+      el.remove();
+    }
+
+    for (const existingMessageId of chatMiniRenderers.keys()) {
+      if (!renderedMessageIds.has(existingMessageId)) {
+        teardownMiniSessionRenderer(existingMessageId);
+      }
     }
 
     chatThread.scrollTop = chatThread.scrollHeight;
@@ -502,15 +1157,11 @@
       id: makeChatId(),
       title: "New Graph Chat",
       graph: (chatGraphSelect && chatGraphSelect.value) || "default",
-      model: (chatModelSelect && chatModelSelect.value) || "gpt-4o",
-      retrieval: (chatRetrievalSelect && chatRetrievalSelect.value) || "hybrid",
+      model: (chatModelSelect && chatModelSelect.value) || "gpt-5-nano",
+      embedding: (chatEmbeddingSelect && chatEmbeddingSelect.value) || "bge:BAAI/bge-m3",
+      retrieval: (chatRetrievalSelect && chatRetrievalSelect.value) || "one-hop",
       updatedAt: Date.now(),
-      messages: [
-        {
-          role: "assistant",
-          text: "새 Graph Chat이 생성되었습니다. 메시지를 입력하면 여기에 누적됩니다.",
-        },
-      ],
+      messages: [],
     };
 
     chatSessions.unshift(session);
@@ -531,7 +1182,11 @@
   }
 
   function removeChatSession(chatId) {
+    const removed = chatSessions.find((session) => session.id === chatId) || null;
     chatSessions = chatSessions.filter((session) => session.id !== chatId);
+    if (removed) {
+      dropMiniStateForSession(removed);
+    }
     if (!chatSessions.length) {
       createChatSession({ select: false });
     }
@@ -575,7 +1230,7 @@
     renderChatSessionList();
   }
 
-  function sendChatMessage() {
+  async function sendChatMessage() {
     const text = (chatInput && chatInput.value ? chatInput.value : "").trim();
     if (!text) return;
 
@@ -592,15 +1247,197 @@
       session = createChatSession({ select: true });
     }
 
-    session.messages.push({ role: "user", text });
+    const historyForApi = session.messages.map((message) => ({
+      role: message.role,
+      content: String(message.text || ""),
+    }));
+
+    session.messages.push({ id: makeChatMessageId(), role: "user", text });
     maybeRenameNewChat(session, text);
-    session.messages.push({ role: "assistant", text: CHAT_PLACEHOLDER_RESPONSE });
+    const retrievalAssistant = {
+      id: makeChatMessageId(),
+      role: "assistant",
+      kind: "retrieval",
+      text: `Retrieving ${RETRIEVING_SPINNER_FRAMES[0]}`,
+      visualSessionId: null,
+    };
+    let answerAssistant = null;
+    let generatingSpinnerTimer = null;
+    let hasGeneratingStarted = false;
+
+    function ensureAnswerAssistant() {
+      if (answerAssistant) return answerAssistant;
+      answerAssistant = {
+        id: makeChatMessageId(),
+        role: "assistant",
+        kind: "answer",
+        text: `Generating ${GENERATING_SPINNER_FRAMES[0]}`,
+      };
+      session.messages.push(answerAssistant);
+      return answerAssistant;
+    }
+    session.messages.push(retrievalAssistant);
     session.updatedAt = Date.now();
 
     if (chatInput) chatInput.value = "";
     renderChatHeader(session);
     renderChatSessionList();
     renderChatThread();
+
+    let spinnerIndex = 0;
+    let retrievalSpinnerTimer = setInterval(() => {
+      spinnerIndex = (spinnerIndex + 1) % RETRIEVING_SPINNER_FRAMES.length;
+      const nextText = `Retrieving ${RETRIEVING_SPINNER_FRAMES[spinnerIndex]}`;
+      retrievalAssistant.text = nextText;
+      updateMessageBodyText(retrievalAssistant.id, nextText);
+    }, RETRIEVING_SPINNER_INTERVAL_MS);
+
+    function startGeneratingPhase() {
+      if (hasGeneratingStarted) return;
+      hasGeneratingStarted = true;
+
+      if (retrievalSpinnerTimer) {
+        clearInterval(retrievalSpinnerTimer);
+        retrievalSpinnerTimer = null;
+      }
+      retrievalAssistant.text = "Retrieval complete.";
+      updateMessageBodyText(retrievalAssistant.id, retrievalAssistant.text);
+
+      ensureAnswerAssistant();
+      renderChatThread();
+
+      let generatingSpinnerIndex = 0;
+      generatingSpinnerTimer = setInterval(() => {
+        if (!answerAssistant) return;
+        generatingSpinnerIndex = (generatingSpinnerIndex + 1) % GENERATING_SPINNER_FRAMES.length;
+        const nextText = `Generating ${GENERATING_SPINNER_FRAMES[generatingSpinnerIndex]}`;
+        answerAssistant.text = nextText;
+        updateMessageBodyText(answerAssistant.id, nextText);
+      }, RETRIEVING_SPINNER_INTERVAL_MS);
+    }
+
+    let miniPollTimer = null;
+    let miniPollInFlight = false;
+
+    try {
+      const createRes = await fetch("/api/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          metadata: {
+            graph: session.graph,
+            model: session.model,
+            retrieval: session.retrieval,
+            embedding: session.embedding,
+          },
+        }),
+      });
+      const createData = await createRes.json().catch(() => ({}));
+      if (!createRes.ok || !createData.session_id) {
+        throw new Error(createData.error || "Failed to create a new visual session.");
+      }
+      session.vizSessionId = String(createData.session_id);
+
+      if (session.vizSessionId) {
+        retrievalAssistant.visualSessionId = session.vizSessionId;
+        renderChatThread();
+        miniPollTimer = setInterval(async () => {
+          if (miniPollInFlight) return;
+          miniPollInFlight = true;
+          try {
+            const snapshot = await renderMiniSessionSnapshot(
+              retrievalAssistant.id,
+              retrievalAssistant.visualSessionId
+            );
+            if (snapshot && (snapshot.stage === "retrieved" || snapshot.stage === "generating")) {
+              startGeneratingPhase();
+              if (miniPollTimer) {
+                clearInterval(miniPollTimer);
+                miniPollTimer = null;
+              }
+            }
+          } finally {
+            miniPollInFlight = false;
+          }
+        }, MINI_SESSION_POLL_MS);
+      }
+
+      let embeddingProvider = "bge";
+      let embeddingModel = "BAAI/bge-m3";
+      if (session.embedding && typeof session.embedding === "string") {
+        const rawEmbedding = session.embedding.trim();
+        if (rawEmbedding.includes(":")) {
+          const [provider, model] = rawEmbedding.split(":", 2);
+          embeddingProvider = String(provider || embeddingProvider).trim().toLowerCase();
+          embeddingModel = String(model || embeddingModel).trim();
+        } else if (rawEmbedding) {
+          embeddingProvider = rawEmbedding.toLowerCase();
+        }
+      }
+
+      const payload = {
+        message: text,
+        graph: session.graph,
+        model: session.model,
+        retrieval: session.retrieval,
+        embedding_provider: embeddingProvider,
+        embedding_model: embeddingModel,
+        history: historyForApi,
+        top_k: 5,
+        session_id: session.vizSessionId || null,
+      };
+
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || `Request failed with status ${res.status}`);
+      }
+
+      if (!hasGeneratingStarted) {
+        startGeneratingPhase();
+      }
+      if (generatingSpinnerTimer) {
+        clearInterval(generatingSpinnerTimer);
+        generatingSpinnerTimer = null;
+      }
+      ensureAnswerAssistant();
+      answerAssistant.text = String(data.answer || "I could not generate a response.");
+      if (data.session_id) {
+        session.vizSessionId = String(data.session_id);
+        retrievalAssistant.visualSessionId = session.vizSessionId;
+        currentSession = session.vizSessionId;
+        if (sessionInput) sessionInput.value = session.vizSessionId;
+        if (currentMode === "debug") {
+          await refreshSessionView({ incremental: false });
+          startEventStream(session.vizSessionId);
+        } else {
+          stopEventStream();
+        }
+      }
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error);
+      retrievalAssistant.text = "Retrieval failed.";
+      ensureAnswerAssistant();
+      answerAssistant.text = `Error: ${message}`;
+    } finally {
+      if (retrievalSpinnerTimer) {
+        clearInterval(retrievalSpinnerTimer);
+      }
+      if (generatingSpinnerTimer) {
+        clearInterval(generatingSpinnerTimer);
+      }
+      if (miniPollTimer) {
+        clearInterval(miniPollTimer);
+      }
+      session.updatedAt = Date.now();
+      renderChatHeader(session);
+      renderChatSessionList();
+      renderChatThread();
+    }
   }
 
   function initChatUi() {
@@ -619,6 +1456,10 @@
     }
     if (chatModelSelect) {
       chatModelSelect.onchange = () => updateActiveChatSetting("model", chatModelSelect.value);
+    }
+    if (chatEmbeddingSelect) {
+      chatEmbeddingSelect.onchange = () =>
+        updateActiveChatSetting("embedding", chatEmbeddingSelect.value);
     }
     if (chatRetrievalSelect) {
       chatRetrievalSelect.onchange = () =>
@@ -677,6 +1518,26 @@
     }
   }
 
+  function renderMiniNodeDetail(messageId, node) {
+    const detail = document.getElementById(`msg-mini-node-detail-${messageId}`);
+    if (!detail) return;
+    if (!node) {
+      detail.classList.add("is-placeholder");
+      detail.textContent = "Click a node to inspect node text and metadata.";
+      return;
+    }
+
+    const payload = {
+      id: node.id,
+      label: node.label || "",
+      type: node.node_type || node.group || "",
+      text: node.node_text || "",
+      metadata: parseNodeMeta(node.node_meta),
+    };
+    detail.classList.remove("is-placeholder");
+    detail.textContent = JSON.stringify(payload, null, 2);
+  }
+
   function toggleSidePanel() {
     sidePanel.classList.toggle("collapsed");
     syncSidePanelUi();
@@ -686,14 +1547,19 @@
   syncSidePanelUi();
 
   applyBtn.onclick = () => {
-    currentSession = (sessionInput.value || "").trim();
+    currentSession = normalizeSessionId(sessionInput ? sessionInput.value : "");
+    if (sessionInput) sessionInput.value = currentSession;
     if (!currentSession) {
       stopEventStream();
       clearGraph();
       updateProgressBar({ percent: 0, current: 0, total: 0, message: "" });
       statusEl.textContent = "base graph view";
+      syncReplayControls("");
       return;
     }
+    statusEl.textContent = `loading session=${currentSession}...`;
+    replayCursorBySession.delete(currentSession);
+    syncReplayControls(currentSession);
     refreshSessionView({ incremental: false });
     startEventStream(currentSession);
   };
@@ -705,6 +1571,7 @@
     clearGraph();
     updateProgressBar({ percent: 0, current: 0, total: 0, message: "" });
     statusEl.textContent = "base graph view";
+    syncReplayControls("");
   };
 
   network.on("click", function (params) {
@@ -745,8 +1612,31 @@
     modeChatBtn.onclick = () => setMode("chat");
   }
 
+  if (replaySlider) {
+    replaySlider.addEventListener("input", () => {
+      if (!currentSession) return;
+      const history = getReplayHistory(currentSession);
+      if (!history.length) return;
+      const targetIndex = Math.max(0, Math.min(history.length - 1, Number(replaySlider.value || 0)));
+      if (targetIndex >= history.length - 1) {
+        showLatestReplay(currentSession, { incremental: false });
+        return;
+      }
+      replayCursorBySession.set(currentSession, targetIndex);
+      applyReplayEntry(currentSession, targetIndex);
+    });
+  }
+
+  if (replayLiveBtn) {
+    replayLiveBtn.onclick = () => {
+      if (!currentSession) return;
+      showLatestReplay(currentSession, { incremental: false });
+    };
+  }
+
   initTheme();
   initChatUi();
   clearGraph();
+  syncReplayControls("");
   setMode("chat");
 })();

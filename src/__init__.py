@@ -31,6 +31,21 @@ from .visualizer import (
     serve_graph,
     update_session,
 )
+from .rag import (
+    BaseRetriever,
+    ChatMessage,
+    ChatRequest,
+    ChatResponse,
+    GraphRAGPipeline,
+    GraphRAGService,
+    HybridRetriever,
+    OneHopRetriever,
+    OpenAIChatGenerator,
+    OpenAIEmbedder,
+    RetrievedNode,
+    RetrievalResult,
+    VectorRetriever,
+)
 
 __all__ = [
     "BaseGraphContainer",
@@ -66,4 +81,17 @@ __all__ = [
     "set_progress",
     "clear_session",
     "delete_session",
+    "ChatMessage",
+    "ChatRequest",
+    "ChatResponse",
+    "RetrievedNode",
+    "RetrievalResult",
+    "OpenAIEmbedder",
+    "OpenAIChatGenerator",
+    "BaseRetriever",
+    "OneHopRetriever",
+    "VectorRetriever",
+    "HybridRetriever",
+    "GraphRAGPipeline",
+    "GraphRAGService",
 ]
