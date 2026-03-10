@@ -6,6 +6,7 @@ from ...core import SearchableGraphContainer
 from ..contracts import RetrievedNode, RetrievalResult
 from .base import BaseRetriever
 
+import time
 
 def _dedup_preserve_order(items: List[str]) -> List[str]:
     seen = set()
@@ -121,27 +122,36 @@ class OneHopRetriever(BaseRetriever):
         context_chunks = _dedup_preserve_order(context_chunks)
 
         if visualizer is not None and session_id:
+            for node_id in one_hop_ids:
+                if node_id in seed_ids:
+                    continue
+                visualizer.update_session(
+                    session_id,
+                    nodes=[
+                        {
+                            "id": node_id,
+                            "style": {
+                                "color": {"background": "#c8e6c9", "border": "#4caf50"},
+                                "borderWidth": 3,
+                            },
+                        }
+                    ],
+                )
+                time.sleep(0.1)  
             visualizer.update_session(
                 session_id,
-                nodes=[
-                    {
-                        "id": node_id,
-                        "style": {
-                            "color": {"background": "#ffecb3", "border": "#fb8c00"},
-                            "borderWidth": 3,
-                        },
-                    }
-                    for node_id in one_hop_ids
-                ],
                 edges=[
                     {
                         "source": edge["source"],
                         "target": edge["target"],
                         "relation": edge["relation"],
                         "style": {"width": 3},
-                    }
-                    for edge in one_hop_edges
+                    } for edge in one_hop_edges
                 ],
+            )
+
+            visualizer.update_session(
+                session_id,
                 progress={"current": 100, "total": 100, "message": "Retrieval complete"},
             )
 

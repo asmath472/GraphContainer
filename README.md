@@ -2,7 +2,7 @@
 
 This document explains how to use `GraphContainer` and its live web visualizer.
 
-![Conceptual Graph Container Modules](./graph-container.png)
+![Conceptual GraphContainer Modules](./graph-container.png)
 
 ## 1. What You Get
 

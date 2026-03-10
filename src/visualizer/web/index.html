@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
     <meta charset="utf-8" />
-    <title>Graph Container Visualizer</title>
+    <title>GraphContainer</title>
+    <link rel="icon" type="image/png" href="/static/logo.png" />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css" />
 </head>
@@ -57,7 +58,7 @@
 
             <div id="sidepanel">
                 <h3>Node Intelligence</h3>
-                <pre id="node-detail">Select a node to inspect its properties.</pre>
+                <pre id="node-detail" style="font-size: 11px;">Select a node to inspect its properties.</pre>
                 <div class="display-settings">
                     <div class="setting-item">
                         <span>Node Labels</span>
@@ -82,7 +83,7 @@
         </section>
 
         <section id="chat-view" class="mode-view active" aria-hidden="false">
-            <div class="chat-shell">
+            <div class="chat-shell" style="padding-top: 56px; padding-bottom: 6px;">
                 <aside class="chat-sidebar">
                     <div class="chat-history-header">
                         <div class="chat-sidebar-title">Graph Chats</div>
@@ -92,59 +93,58 @@
                 </aside>
 
                 <main class="chat-main">
-                    <header class="chat-header">
+                    <header class="chat-header" style="padding: 10px 14px 6px;">
                         <div class="chat-header-main">
-                            <h2 id="chat-title" contenteditable="true" spellcheck="false" title="Click to rename chat">
+                            <h2 id="chat-title" contenteditable="true" spellcheck="false" title="Click to rename chat" style="font-size: 16px; margin: 0 0 2px -4px;">
                                 New Graph Chat
                             </h2>
-                            <span class="chat-subtitle" id="chat-subtitle">Query the loaded source graph</span>
+                            <span class="chat-subtitle" id="chat-subtitle" style="font-size: 10px; line-height: 1.2;">Query the loaded source graph</span>
                         </div>
-                        <div class="chat-header-controls">
-                            <select id="chat-graph-select" aria-label="Select Graph">
+                        <div class="chat-header-controls" style="gap: 6px;">
+                            <select id="chat-graph-select" aria-label="Select Graph" style="padding: 6px 8px; font-size: 11px; min-width: 150px;">
                                 <option value="default">Graph: Default</option>
                                 <option value="full">Graph: Full KG</option>
                                 <option value="experiment-a">Graph: Experiment A</option>
                             </select>
-                            <select id="chat-model-select" aria-label="Select Model">
+                            <select id="chat-model-select" aria-label="Select Model" style="padding: 6px 8px; font-size: 11px; min-width: 128px;">
                                 <option value="gpt-5-nano">Model: gpt-5-nano</option>
                             </select>
-                            <select id="chat-embedding-select" aria-label="Select Embedding Model">
+                            <select id="chat-embedding-select" aria-label="Select Embedding Model" style="padding: 6px 8px; font-size: 11px; min-width: 148px;">
                                 <option value="bge:BAAI/bge-m3">Embedding: BAAI/bge-m3</option>
                                 <option value="openai:text-embedding-3-small">Embedding: OpenAI text-embedding-3-small</option>
                             </select>
-                            <select id="chat-retrieval-select" aria-label="Select Retrieval Method">
+                            <select id="chat-retrieval-select" aria-label="Select Retrieval Method" style="padding: 6px 8px; font-size: 11px; min-width: 122px;">
                                 <option value="one-hop">RAG: One-Hop</option>
                                 <option value="vector">RAG: Vector</option>
                                 <option value="hybrid">RAG: Hybrid</option>
                             </select>
                         </div>
                     </header>
-                    <div class="chat-thread" id="chat-thread">
-                        <div class="msg assistant">
-                            <div class="msg-role">Assistant</div>
-                            <div class="msg-body">
-                                Graph chat is ready. Ask a question to run retrieval and generation.
-                            </div>
-                        </div>
-                        <div class="msg user">
-                            <div class="msg-role">You</div>
-                            <div class="msg-body">
-                                Let me ask questions against the selected graph and retrieval method.
-                            </div>
-                        </div>
-                    </div>
-                    <footer class="chat-input-wrap">
-                        <textarea id="chat-input" placeholder="Enter a question for the loaded graph..."></textarea>
-                        <button id="chat-send" type="button">Send</button>
+                    <div class="chat-thread" id="chat-thread" style="padding: 12px 14px;"></div>
+                    <footer class="chat-input-wrap" style="padding: 10px 14px 10px; gap: 8px;">
+                        <textarea id="chat-input" placeholder="Enter a question for the loaded graph..." style="min-height: 44px; padding: 10px 12px;"></textarea>
+                        <button id="chat-send" type="button" style="padding: 8px 12px; min-height: 44px;">Send</button>
                     </footer>
                 </main>
             </div>
+             <footer style="
+                padding: 6px 12px 4px; 
+                text-align: center; 
+                font-family: 'Times New Roman', Times, serif; /* 세리프 서체 지정 */
+                color: #888;                                 /* 회색 지정 */
+                font-size: 10px;                             /* 작은 크기 지정 */
+                opacity: 0.8;                                /* 약간의 투명도로 더 부드럽게 */
+                line-height: 1.2;
+            ">
+                <p style="margin: 0; line-height: 1.1;">
+                    GraphContainer © 2026 Seonho AN, Chaejeong HYUN, Min-Soo KIM. Infolab, KAIST. 
+                    <span style="margin-left: 4px;">Contact: asho1@kaist.ac.kr</span>
+                </p>
+            </footer>
         </section>
     </div>
-
     <script src="https://unpkg.com/vis-network@9.1.9/dist/vis-network.min.js"></script>
     <script src="/static/app.js"></script>
-
     
 </body>
 </html>

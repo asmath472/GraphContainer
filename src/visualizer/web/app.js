@@ -313,6 +313,18 @@
     return await res.json();
   }
 
+  async function fetchSessionReplay(sessionId) {
+    const res = await fetch(`/api/session/${sessionId}/replay`);
+    if (!res.ok) return null;
+    return await res.json();
+  }
+
+  function normalizeSessionId(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    return raw.replace(/^session\s*:\s*/i, "").trim();
+  }
+
   function updateProgressBar(progress) {
     const p = progress || {};
     let percent = Number(p.percent || 0);
@@ -411,22 +423,11 @@
     const last = history.length ? history[history.length - 1] : null;
     const currentProgress = snapshot.progress || {};
     const currentPercent = Number(currentProgress.percent || 0);
-    const currentMessage = String(currentProgress.message || "");
-    const currentNodes = (snapshot.nodes || []).length;
-    const currentEdges = (snapshot.edges || []).length;
 
     if (last) {
       const lastProgress = (last.view && last.view.progress) || {};
       const lastPercent = Number(lastProgress.percent || 0);
-      const lastMessage = String(lastProgress.message || "");
-      const lastNodes = ((last.view && last.view.nodes) || []).length;
-      const lastEdges = ((last.view && last.view.edges) || []).length;
-      if (
-        Math.abs(currentPercent - lastPercent) < 0.0001 &&
-        currentMessage === lastMessage &&
-        currentNodes === lastNodes &&
-        currentEdges === lastEdges
-      ) {
+      if (Math.abs(currentPercent - lastPercent) < 0.0001) {
         return;
       }
     }
@@ -445,6 +446,25 @@
         replayCursorBySession.set(sessionId, Math.max(0, Number(cursor) - removed));
       }
     }
+  }
+
+  function loadReplayHistory(sessionId, snapshots) {
+    if (!sessionId) return;
+    if (!Array.isArray(snapshots)) return;
+    const history = [];
+    for (let i = 0; i < snapshots.length; i += 1) {
+      const frame = snapshots[i];
+      if (!frame || typeof frame !== "object") continue;
+      const ts =
+        typeof frame.updated_at === "number" && Number.isFinite(frame.updated_at)
+          ? Math.floor(frame.updated_at * 1000)
+          : Date.now() + i;
+      history.push({
+        ts,
+        view: cloneReplayView(frame),
+      });
+    }
+    sessionReplayHistory.set(sessionId, history);
   }
 
   function applyReplayEntry(sessionId, index) {
@@ -494,7 +514,10 @@
   async function refreshSessionView({ incremental = false } = {}) {
     if (!currentSession) return;
     const view = await fetchSessionSubgraph(currentSession);
-    if (!view) return;
+    if (!view) {
+      statusEl.textContent = `session=${currentSession} fetch failed`;
+      return;
+    }
     if (!view.exists) {
       clearGraph();
       statusEl.textContent = `session ${currentSession} not found`;
@@ -503,8 +526,17 @@
       return;
     }
 
-    recordReplaySnapshot(currentSession, view);
-    const history = getReplayHistory(currentSession);
+    const replay = await fetchSessionReplay(currentSession);
+    if (replay && replay.exists && Array.isArray(replay.snapshots)) {
+      loadReplayHistory(currentSession, replay.snapshots);
+    } else {
+      recordReplaySnapshot(currentSession, view);
+    }
+    let history = getReplayHistory(currentSession);
+    if (!history.length) {
+      recordReplaySnapshot(currentSession, view);
+      history = getReplayHistory(currentSession);
+    }
     const cursor = getReplayCursor(currentSession);
     const hasReplayCursor = cursor !== null && Number(cursor) < history.length - 1;
     if (hasReplayCursor) {
@@ -1129,13 +1161,7 @@
       embedding: (chatEmbeddingSelect && chatEmbeddingSelect.value) || "bge:BAAI/bge-m3",
       retrieval: (chatRetrievalSelect && chatRetrievalSelect.value) || "one-hop",
       updatedAt: Date.now(),
-      messages: [
-        {
-          id: makeChatMessageId(),
-          role: "assistant",
-          text: "A new graph chat is ready. Send a message to query the loaded graph.",
-        },
-      ],
+      messages: [],
     };
 
     chatSessions.unshift(session);
@@ -1521,7 +1547,8 @@
   syncSidePanelUi();
 
   applyBtn.onclick = () => {
-    currentSession = (sessionInput.value || "").trim();
+    currentSession = normalizeSessionId(sessionInput ? sessionInput.value : "");
+    if (sessionInput) sessionInput.value = currentSession;
     if (!currentSession) {
       stopEventStream();
       clearGraph();
@@ -1530,6 +1557,7 @@
       syncReplayControls("");
       return;
     }
+    statusEl.textContent = `loading session=${currentSession}...`;
     replayCursorBySession.delete(currentSession);
     syncReplayControls(currentSession);
     refreshSessionView({ incremental: false });

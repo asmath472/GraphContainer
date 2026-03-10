@@ -222,7 +222,7 @@ body {
   margin-bottom: 12px;
 }
 
-#debug-view input {
+#session-input {
   flex: 1;
   background: var(--input-bg);
   border: 1px solid var(--border-color);
@@ -233,11 +233,11 @@ body {
   transition: 0.2s;
 }
 
-#debug-view input::placeholder {
+#session-input::placeholder {
   color: var(--text-muted);
 }
 
-#debug-view input:focus {
+#session-input:focus {
   border-color: var(--accent-color);
   box-shadow: 0 0 0 2px rgba(47, 111, 235, 0.22);
 }
@@ -276,6 +276,9 @@ body {
   margin-top: 12px;
   border-top: 1px solid var(--border-color);
   padding-top: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 .replay-header {
@@ -304,6 +307,10 @@ body {
 
 #debug-replay-slider {
   width: 100%;
+  max-width: 100%;
+  display: block;
+  box-sizing: border-box;
+  padding: 0;
   margin: 0 0 6px;
 }
 
@@ -699,8 +706,8 @@ body {
 }
 
 .msg.msg-retrieval {
-  width: min(90vw, 360px);
-  max-width: min(90vw, 360px);
+  width: min(90vw, 78%);
+  max-width: min(90vw, 78%);
 }
 
 .msg-role {
@@ -733,6 +740,13 @@ body {
   background: rgba(15, 23, 36, 0.28);
   width: 100%;
   box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-areas:
+    "graph detail"
+    "session session";
+  gap: 8px;
+  --mini-pane-height: 260px;
 }
 
 :root[data-theme="light"] .msg-mini-session-wrap {
@@ -740,17 +754,19 @@ body {
 }
 
 .msg-mini-session-graph {
+  grid-area: graph;
   width: 100%;
-  aspect-ratio: 1 / 1;
-  height: auto;
-  min-height: 220px;
-  max-height: 360px;
+  aspect-ratio: auto;
+  height: var(--mini-pane-height);
+  min-height: var(--mini-pane-height);
+  max-height: var(--mini-pane-height);
   border-radius: 8px;
   border: 1px solid var(--border-color);
   background: radial-gradient(circle at center, var(--network-bg-start) 0%, var(--network-bg-end) 100%);
 }
 
 .msg-mini-session-id {
+  grid-area: session;
   margin-top: 6px;
   font-size: 10px;
   font-family: "Fira Code", monospace;
@@ -759,7 +775,8 @@ body {
 }
 
 .msg-mini-session-node-detail {
-  margin-top: 6px;
+  grid-area: detail;
+  margin: 0;
   font-size: 11px;
   line-height: 1.4;
   font-family: "Fira Code", monospace;
@@ -770,6 +787,10 @@ body {
   padding: 8px;
   white-space: pre-wrap;
   word-break: break-word;
+  height: var(--mini-pane-height);
+  min-height: var(--mini-pane-height);
+  max-height: var(--mini-pane-height);
+  overflow: auto;
 }
 
 .msg-mini-session-node-detail.is-placeholder {
@@ -777,6 +798,16 @@ body {
   border-style: dashed;
   color: var(--text-dim);
   font-style: italic;
+}
+
+@media (max-width: 900px) {
+  .msg-mini-session-wrap {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "graph"
+      "detail"
+      "session";
+  }
 }
 
 .chat-input-wrap {
