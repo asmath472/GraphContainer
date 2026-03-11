@@ -1,10 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+import logging
+from typing import Any, Dict, List, Optional
 
 from ..core import SearchableGraphContainer
 from .contracts import ChatRequest, ChatResponse
 from .retrievers.base import BaseRetriever
+
+logger = logging.getLogger(__name__)
+
+# Retrievers that do NOT need an embedding vector to operate
+_EMBEDDING_FREE_RETRIEVERS = {"one-hop", "graph-hop", "graph-2-hop", "graph"}
 
 
 class GraphRAGPipeline:
@@ -33,6 +39,10 @@ class GraphRAGPipeline:
             raise ValueError(f"Unsupported retrieval method: {raw_name}. Supported: {supported}")
         return name
 
+    def _needs_embedding(self, retrieval_name: str) -> bool:
+        """Return True if the retriever requires a query embedding vector."""
+        return retrieval_name not in _EMBEDDING_FREE_RETRIEVERS
+
     def run(
         self,
         *,
@@ -43,11 +53,28 @@ class GraphRAGPipeline:
         retrieval_name = self._resolve_retrieval(request.retrieval)
         retriever = self.retrievers[retrieval_name]
 
-        query_vector = self.embedder.embed(
-            request.message,
-            provider=request.embedding_provider,
-            model=request.embedding_model,
-        )
+        query_vector: List[float] = []
+        if self._needs_embedding(retrieval_name):
+            try:
+                query_vector = self.embedder.embed(
+                    request.message,
+                    provider=request.embedding_provider,
+                    model=request.embedding_model,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Embedding failed (%s: %s). Falling back to one-hop retrieval without vector.",
+                    type(exc).__name__,
+                    exc,
+                )
+                # Try to fall back to one-hop (no vector needed)
+                if "one-hop" in self.retrievers:
+                    retrieval_name = "one-hop"
+                    retriever = self.retrievers["one-hop"]
+                    query_vector = []
+                else:
+                    raise
+
         retrieval_result = retriever.retrieve(
             graph=graph,
             query=request.message,

@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="en">
+
 <head>
     <meta charset="utf-8" />
     <title>GraphContainer</title>
@@ -7,11 +8,13 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css" />
 </head>
+
 <body>
     <div id="app-shell">
         <div id="mode-switcher">
             <button id="mode-chat" class="mode-btn active" type="button">Chat Mode</button>
             <button id="mode-debug" class="mode-btn" type="button">Debug Mode</button>
+            <button id="mode-import" class="mode-btn" type="button">Import Mode</button>
         </div>
         <button id="theme-toggle" type="button" aria-label="Toggle theme">
             <span id="theme-toggle-label">Dark Mode</span>
@@ -29,7 +32,8 @@
                 <button id="clear-session" style="width:100%">Clear Session</button>
 
                 <div class="progress-container">
-                    <div id="progress-text" style="font-size: 11px; color: var(--text-dim); margin-bottom:4px;">Ready</div>
+                    <div id="progress-text" style="font-size: 11px; color: var(--text-dim); margin-bottom:4px;">Ready
+                    </div>
                     <div class="progress-wrap">
                         <div id="progress-fill"></div>
                     </div>
@@ -41,16 +45,8 @@
                             <span>Replay</span>
                             <button id="debug-replay-live" type="button">Live</button>
                         </div>
-                        <input
-                            id="debug-replay-slider"
-                            type="range"
-                            min="0"
-                            max="0"
-                            step="1"
-                            value="0"
-                            disabled
-                            aria-label="Replay retrieval progress"
-                        />
+                        <input id="debug-replay-slider" type="range" min="0" max="0" step="1" value="0" disabled
+                            aria-label="Replay retrieval progress" />
                         <div id="debug-replay-status">No replay snapshots</div>
                     </div>
                 </div>
@@ -95,25 +91,30 @@
                 <main class="chat-main">
                     <header class="chat-header" style="padding: 10px 14px 6px;">
                         <div class="chat-header-main">
-                            <h2 id="chat-title" contenteditable="true" spellcheck="false" title="Click to rename chat" style="font-size: 16px; margin: 0 0 2px -4px;">
+                            <h2 id="chat-title" contenteditable="true" spellcheck="false" title="Click to rename chat"
+                                style="font-size: 16px; margin: 0 0 2px -4px;">
                                 New Graph Chat
                             </h2>
-                            <span class="chat-subtitle" id="chat-subtitle" style="font-size: 10px; line-height: 1.2;">Query the loaded source graph</span>
+                            <span class="chat-subtitle" id="chat-subtitle"
+                                style="font-size: 10px; line-height: 1.2;">Query the loaded source graph</span>
                         </div>
                         <div class="chat-header-controls" style="gap: 6px;">
-                            <select id="chat-graph-select" aria-label="Select Graph" style="padding: 6px 8px; font-size: 11px; min-width: 150px;">
-                                <option value="default">Graph: Default</option>
-                                <option value="full">Graph: Full KG</option>
-                                <option value="experiment-a">Graph: Experiment A</option>
+                            <select id="chat-graph-select" aria-label="Select Graph"
+                                style="padding: 6px 8px; font-size: 11px; min-width: 150px;">
+                                <!-- populated dynamically from /api/graphs -->
                             </select>
-                            <select id="chat-model-select" aria-label="Select Model" style="padding: 6px 8px; font-size: 11px; min-width: 128px;">
+                            <select id="chat-model-select" aria-label="Select Model"
+                                style="padding: 6px 8px; font-size: 11px; min-width: 128px;">
                                 <option value="gpt-5-nano">Model: gpt-5-nano</option>
                             </select>
-                            <select id="chat-embedding-select" aria-label="Select Embedding Model" style="padding: 6px 8px; font-size: 11px; min-width: 148px;">
+                            <select id="chat-embedding-select" aria-label="Select Embedding Model"
+                                style="padding: 6px 8px; font-size: 11px; min-width: 148px;">
                                 <option value="bge:BAAI/bge-m3">Embedding: BAAI/bge-m3</option>
-                                <option value="openai:text-embedding-3-small">Embedding: OpenAI text-embedding-3-small</option>
+                                <option value="openai:text-embedding-3-small">Embedding: OpenAI text-embedding-3-small
+                                </option>
                             </select>
-                            <select id="chat-retrieval-select" aria-label="Select Retrieval Method" style="padding: 6px 8px; font-size: 11px; min-width: 122px;">
+                            <select id="chat-retrieval-select" aria-label="Select Retrieval Method"
+                                style="padding: 6px 8px; font-size: 11px; min-width: 122px;">
                                 <option value="one-hop">RAG: One-Hop</option>
                                 <option value="vector">RAG: Vector</option>
                                 <option value="hybrid">RAG: Hybrid</option>
@@ -122,12 +123,13 @@
                     </header>
                     <div class="chat-thread" id="chat-thread" style="padding: 12px 14px;"></div>
                     <footer class="chat-input-wrap" style="padding: 10px 14px 10px; gap: 8px;">
-                        <textarea id="chat-input" placeholder="Enter a question for the loaded graph..." style="min-height: 44px; padding: 10px 12px;"></textarea>
+                        <textarea id="chat-input" placeholder="Enter a question for the loaded graph..."
+                            style="min-height: 44px; padding: 10px 12px;"></textarea>
                         <button id="chat-send" type="button" style="padding: 8px 12px; min-height: 44px;">Send</button>
                     </footer>
                 </main>
             </div>
-             <footer style="
+            <footer style="
                 padding: 6px 12px 4px; 
                 text-align: center; 
                 font-family: 'Times New Roman', Times, serif; /* 세리프 서체 지정 */
@@ -137,14 +139,55 @@
                 line-height: 1.2;
             ">
                 <p style="margin: 0; line-height: 1.1;">
-                    GraphContainer © 2026 Seonho AN, Chaejeong HYUN, Min-Soo KIM. Infolab, KAIST. 
+                    GraphContainer © 2026 Seonho AN, Chaejeong HYUN, Min-Soo KIM. Infolab, KAIST.
                     <span style="margin-left: 4px;">Contact: asho1@kaist.ac.kr</span>
                 </p>
             </footer>
         </section>
+
+        <section id="import-view" class="mode-view" aria-hidden="true">
+            <div class="import-shell">
+                <div class="import-card">
+                    <h2>Import Graph</h2>
+                    <p class="import-subtitle">Upload graph files and register them for chat/debug.</p>
+                    <form id="import-form">
+                        <label for="import-adapter">Graph Type</label>
+                        <select id="import-adapter" required>
+                            <option value="fastinsight">FastInsight</option>
+                            <option value="lightrag">LightRAG</option>
+                            <option value="hipporag">HippoRAG</option>
+                            <option value="g_retriever">G-Retriever (CSV)</option>
+                            <option value="expla_graphs">Expla Graphs (TSV)</option>
+                            <option value="freebasekg">Freebase KG (HF)</option>
+                        </select>
+
+                        <label for="import-label">Graph Label</label>
+                        <input id="import-label" type="text" placeholder="Optional display name" />
+
+                        <div id="import-file-group">
+                            <label for="import-files">Graph Files</label>
+                            <input id="import-files" type="file" multiple webkitdirectory directory
+                                accept=".zip,.json,.jsonl,.csv,.tsv,.pickle,.parquet" />
+                            <div class="import-hint">
+                                Upload a folder (supported in Chromium) or a zip containing the graph files.
+                            </div>
+                        </div>
+
+                        <div id="import-dataset-group" class="hidden">
+                            <label for="import-dataset">Hugging Face Dataset</label>
+                            <input id="import-dataset" type="text" value="rmanluo/RoG-webqsp" />
+                        </div>
+
+                        <button id="import-submit" type="submit">Import Graph</button>
+                    </form>
+                    <div id="import-status" class="import-status">Ready.</div>
+                </div>
+            </div>
+        </section>
     </div>
     <script src="https://unpkg.com/vis-network@9.1.9/dist/vis-network.min.js"></script>
     <script src="/static/app.js"></script>
-    
+
 </body>
+
 </html>
