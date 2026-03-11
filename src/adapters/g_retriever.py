@@ -128,126 +128,15 @@ class GRetrieverAdapter(GraphAdapter):
         **kwargs: Any,
     ) -> SearchableGraphContainer:
         src_path = _normalize_source(source)
-        graph_id = kwargs.get("graph_id")
-        graph_id_str = str(graph_id) if graph_id is not None else None
         graph = container_or_new(container)
 
-        if graph_id_str == "all":
-            graph_ids = _list_graph_ids(src_path)
-            node_key_to_global: Dict[Tuple[str, str], str] = {}
-            edge_key_to_idx: Dict[Tuple[str, str, str], int] = {}
+        graph_ids = _list_graph_ids(src_path)
+        node_key_to_global: Dict[Tuple[str, str], str] = {}
+        edge_key_to_idx: Dict[Tuple[str, str, str], int] = {}
 
-            for gid in graph_ids:
-                node_csv, edge_csv = _resolve_csv_paths(src_path, graph_id=gid)
-                local_to_global: Dict[str, str] = {}
-
-                for raw in _iter_csv_rows(node_csv):
-                    node_id = raw.get("node_id") or raw.get("id")
-                    if node_id is None or str(node_id).strip() == "":
-                        continue
-
-                    node_text = raw.get("node_attr", raw.get("text"))
-                    node_type = str(raw.get("type", "Entity"))
-                    local_id = str(node_id)
-                    node_key_text = _normalize_text(node_text)
-                    if node_key_text:
-                        node_key = (node_type.lower(), node_key_text)
-                        default_global_id = f"node-{md5(f'{node_key[0]}|{node_key[1]}'.encode()).hexdigest()}"
-                    else:
-                        node_key = ("__fallback__", f"{gid}:{local_id}")
-                        default_global_id = f"{gid}:{local_id}"
-                    global_id = node_key_to_global.get(node_key, default_global_id)
-                    local_to_global[local_id] = global_id
-                    if global_id in graph.nodes:
-                        existing_meta = graph.nodes[global_id].metadata
-                        _append_unique(existing_meta, "graph_ids", str(gid))
-                        _append_unique(existing_meta, "original_node_ids", f"{gid}:{local_id}")
-                        continue
-
-                    metadata = {
-                        k: v
-                        for k, v in raw.items()
-                        if k not in {"node_id", "id", "node_attr", "text", "type"}
-                    }
-                    metadata["graph_ids"] = [str(gid)]
-                    metadata["original_node_ids"] = [f"{gid}:{local_id}"]
-                    if keep_source_reference:
-                        metadata.setdefault("_source_path", str(src_path))
-                        metadata.setdefault("_source_style", "g_retriever")
-
-                    graph.add_node(
-                        NodeRecord(
-                            id=global_id,
-                            type=node_type,
-                            text=node_text,
-                            metadata=metadata,
-                        )
-                    )
-                    node_key_to_global[node_key] = global_id
-
-                for raw in _iter_csv_rows(edge_csv):
-                    source_id = raw.get("src", raw.get("source"))
-                    target_id = raw.get("dst", raw.get("target"))
-                    if source_id is None or target_id is None:
-                        continue
-
-                    src_local = str(source_id)
-                    tgt_local = str(target_id)
-                    source_global = local_to_global.get(src_local, f"{gid}:{src_local}")
-                    target_global = local_to_global.get(tgt_local, f"{gid}:{tgt_local}")
-
-                    relation = str(raw.get("edge_attr", raw.get("relation", "related")))
-                    try:
-                        weight = float(raw.get("weight", 1.0))
-                    except (TypeError, ValueError):
-                        weight = 1.0
-
-                    edge_key = (source_global, relation, target_global)
-                    if edge_key in edge_key_to_idx:
-                        edge_idx = edge_key_to_idx[edge_key]
-                        existing_edge = graph.edges[edge_idx]
-                        if existing_edge.weight < weight:
-                            existing_edge.weight = weight
-                        _append_unique(existing_edge.metadata, "graph_ids", str(gid))
-                        _append_unique(
-                            existing_edge.metadata,
-                            "original_edge_ids",
-                            f"{gid}:{src_local}->{tgt_local}",
-                        )
-                        continue
-
-                    metadata = {
-                        k: v
-                        for k, v in raw.items()
-                        if k
-                        not in {
-                            "src",
-                            "source",
-                            "dst",
-                            "target",
-                            "edge_attr",
-                            "relation",
-                            "weight",
-                        }
-                    }
-                    metadata["graph_ids"] = [str(gid)]
-                    metadata["original_edge_ids"] = [f"{gid}:{src_local}->{tgt_local}"]
-                    if keep_source_reference:
-                        metadata.setdefault("_source_path", str(src_path))
-                        metadata.setdefault("_source_style", "g_retriever")
-
-                    graph.add_edge(
-                        EdgeRecord(
-                            source=source_global,
-                            target=target_global,
-                            relation=relation,
-                            weight=weight,
-                            metadata=metadata,
-                        )
-                    )
-                    edge_key_to_idx[edge_key] = len(graph.edges) - 1
-        else:
-            node_csv, edge_csv = _resolve_csv_paths(src_path, graph_id=graph_id_str)
+        for gid in graph_ids:
+            node_csv, edge_csv = _resolve_csv_paths(src_path, graph_id=gid)
+            local_to_global: Dict[str, str] = {}
 
             for raw in _iter_csv_rows(node_csv):
                 node_id = raw.get("node_id") or raw.get("id")
@@ -256,25 +145,42 @@ class GRetrieverAdapter(GraphAdapter):
 
                 node_text = raw.get("node_attr", raw.get("text"))
                 node_type = str(raw.get("type", "Entity"))
+                local_id = str(node_id)
+                node_key_text = _normalize_text(node_text)
+                if node_key_text:
+                    node_key = (node_type.lower(), node_key_text)
+                    default_global_id = f"node-{md5(f'{node_key[0]}|{node_key[1]}'.encode()).hexdigest()}"
+                else:
+                    node_key = ("__fallback__", f"{gid}:{local_id}")
+                    default_global_id = f"{gid}:{local_id}"
+                global_id = node_key_to_global.get(node_key, default_global_id)
+                local_to_global[local_id] = global_id
+                if global_id in graph.nodes:
+                    existing_meta = graph.nodes[global_id].metadata
+                    _append_unique(existing_meta, "graph_ids", str(gid))
+                    _append_unique(existing_meta, "original_node_ids", f"{gid}:{local_id}")
+                    continue
+
                 metadata = {
                     k: v
                     for k, v in raw.items()
                     if k not in {"node_id", "id", "node_attr", "text", "type"}
                 }
-                if graph_id_str is not None:
-                    metadata.setdefault("graph_id", graph_id_str)
+                metadata["graph_ids"] = [str(gid)]
+                metadata["original_node_ids"] = [f"{gid}:{local_id}"]
                 if keep_source_reference:
                     metadata.setdefault("_source_path", str(src_path))
                     metadata.setdefault("_source_style", "g_retriever")
 
                 graph.add_node(
                     NodeRecord(
-                        id=str(node_id),
+                        id=global_id,
                         type=node_type,
                         text=node_text,
                         metadata=metadata,
                     )
                 )
+                node_key_to_global[node_key] = global_id
 
             for raw in _iter_csv_rows(edge_csv):
                 source_id = raw.get("src", raw.get("source"))
@@ -282,33 +188,62 @@ class GRetrieverAdapter(GraphAdapter):
                 if source_id is None or target_id is None:
                     continue
 
+                src_local = str(source_id)
+                tgt_local = str(target_id)
+                source_global = local_to_global.get(src_local, f"{gid}:{src_local}")
+                target_global = local_to_global.get(tgt_local, f"{gid}:{tgt_local}")
+
                 relation = str(raw.get("edge_attr", raw.get("relation", "related")))
                 try:
                     weight = float(raw.get("weight", 1.0))
                 except (TypeError, ValueError):
                     weight = 1.0
 
+                edge_key = (source_global, relation, target_global)
+                if edge_key in edge_key_to_idx:
+                    edge_idx = edge_key_to_idx[edge_key]
+                    existing_edge = graph.edges[edge_idx]
+                    if existing_edge.weight < weight:
+                        existing_edge.weight = weight
+                    _append_unique(existing_edge.metadata, "graph_ids", str(gid))
+                    _append_unique(
+                        existing_edge.metadata,
+                        "original_edge_ids",
+                        f"{gid}:{src_local}->{tgt_local}",
+                    )
+                    continue
+
                 metadata = {
                     k: v
                     for k, v in raw.items()
-                    if k not in {"src", "source", "dst", "target", "edge_attr", "relation", "weight"}
+                    if k
+                    not in {
+                        "src",
+                        "source",
+                        "dst",
+                        "target",
+                        "edge_attr",
+                        "relation",
+                        "weight",
+                    }
                 }
-                if graph_id_str is not None:
-                    metadata.setdefault("graph_id", graph_id_str)
+                metadata["graph_ids"] = [str(gid)]
+                metadata["original_edge_ids"] = [f"{gid}:{src_local}->{tgt_local}"]
                 if keep_source_reference:
                     metadata.setdefault("_source_path", str(src_path))
                     metadata.setdefault("_source_style", "g_retriever")
 
                 graph.add_edge(
                     EdgeRecord(
-                        source=str(source_id),
-                        target=str(target_id),
+                        source=source_global,
+                        target=target_global,
                         relation=relation,
                         weight=weight,
                         metadata=metadata,
                     )
                 )
-
+                edge_key_to_idx[edge_key] = len(graph.edges) - 1
+        
         return graph
 
     def export_graph(

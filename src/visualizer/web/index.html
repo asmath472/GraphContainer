@@ -14,6 +14,7 @@
         <div id="mode-switcher">
             <button id="mode-chat" class="mode-btn active" type="button">Chat Mode</button>
             <button id="mode-debug" class="mode-btn" type="button">Debug Mode</button>
+            <button id="mode-import" class="mode-btn" type="button">Import Mode</button>
         </div>
         <button id="theme-toggle" type="button" aria-label="Toggle theme">
             <span id="theme-toggle-label">Dark Mode</span>
@@ -142,6 +143,46 @@
                     <span style="margin-left: 4px;">Contact: asho1@kaist.ac.kr</span>
                 </p>
             </footer>
+        </section>
+
+        <section id="import-view" class="mode-view" aria-hidden="true">
+            <div class="import-shell">
+                <div class="import-card">
+                    <h2>Import Graph</h2>
+                    <p class="import-subtitle">Upload graph files and register them for chat/debug.</p>
+                    <form id="import-form">
+                        <label for="import-adapter">Graph Type</label>
+                        <select id="import-adapter" required>
+                            <option value="fastinsight">FastInsight</option>
+                            <option value="lightrag">LightRAG</option>
+                            <option value="hipporag">HippoRAG</option>
+                            <option value="g_retriever">G-Retriever (CSV)</option>
+                            <option value="expla_graphs">Expla Graphs (TSV)</option>
+                            <option value="freebasekg">Freebase KG (HF)</option>
+                        </select>
+
+                        <label for="import-label">Graph Label</label>
+                        <input id="import-label" type="text" placeholder="Optional display name" />
+
+                        <div id="import-file-group">
+                            <label for="import-files">Graph Files</label>
+                            <input id="import-files" type="file" multiple webkitdirectory directory
+                                accept=".zip,.json,.jsonl,.csv,.tsv,.pickle,.parquet" />
+                            <div class="import-hint">
+                                Upload a folder (supported in Chromium) or a zip containing the graph files.
+                            </div>
+                        </div>
+
+                        <div id="import-dataset-group" class="hidden">
+                            <label for="import-dataset">Hugging Face Dataset</label>
+                            <input id="import-dataset" type="text" value="rmanluo/RoG-webqsp" />
+                        </div>
+
+                        <button id="import-submit" type="submit">Import Graph</button>
+                    </form>
+                    <div id="import-status" class="import-status">Ready.</div>
+                </div>
+            </div>
         </section>
     </div>
     <script src="https://unpkg.com/vis-network@9.1.9/dist/vis-network.min.js"></script>

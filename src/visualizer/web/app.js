@@ -4,8 +4,10 @@
 
   const debugView = document.getElementById("debug-view");
   const chatView = document.getElementById("chat-view");
+  const importView = document.getElementById("import-view");
   const modeDebugBtn = document.getElementById("mode-debug");
   const modeChatBtn = document.getElementById("mode-chat");
+  const modeImportBtn = document.getElementById("mode-import");
   const themeToggleBtn = document.getElementById("theme-toggle");
   const themeToggleLabel = document.getElementById("theme-toggle-label");
 
@@ -37,6 +39,15 @@
   const chatThread = document.getElementById("chat-thread");
   const chatInput = document.getElementById("chat-input");
   const chatSendBtn = document.getElementById("chat-send");
+
+  const importForm = document.getElementById("import-form");
+  const importAdapterSelect = document.getElementById("import-adapter");
+  const importLabelInput = document.getElementById("import-label");
+  const importFilesInput = document.getElementById("import-files");
+  const importDatasetInput = document.getElementById("import-dataset");
+  const importFileGroup = document.getElementById("import-file-group");
+  const importDatasetGroup = document.getElementById("import-dataset-group");
+  const importStatus = document.getElementById("import-status");
 
   const network = new vis.Network(
     document.getElementById("network"),
@@ -83,6 +94,25 @@
     }
   } catch (_) {
     hops = 2;
+  }
+
+  async function refreshGraphSelect(activeName = "") {
+    if (!chatGraphSelect) return;
+    try {
+      const res = await fetch("/api/graphs");
+      if (!res.ok) return;
+      const payload = await res.json();
+      const graphs = Array.isArray(payload.graphs) ? payload.graphs : [];
+      if (!graphs.length) return;
+      chatGraphSelect.innerHTML = "";
+      for (const g of graphs) {
+        const opt = document.createElement("option");
+        opt.value = g.name;
+        opt.textContent = `Graph: ${g.label || g.name}`;
+        if (g.active || (activeName && g.name === activeName)) opt.selected = true;
+        chatGraphSelect.appendChild(opt);
+      }
+    } catch (_) { }
   }
 
   let currentSession = "";
@@ -595,15 +625,24 @@
   }
 
   function setMode(mode) {
-    currentMode = mode === "chat" ? "chat" : "debug";
+    currentMode = mode === "chat" ? "chat" : mode === "import" ? "import" : "debug";
     const isDebug = currentMode === "debug";
+    const isChat = currentMode === "chat";
+    const isImport = currentMode === "import";
 
     debugView.classList.toggle("active", isDebug);
-    chatView.classList.toggle("active", !isDebug);
-    chatView.setAttribute("aria-hidden", isDebug ? "true" : "false");
+    chatView.classList.toggle("active", isChat);
+    if (importView) {
+      importView.classList.toggle("active", isImport);
+      importView.setAttribute("aria-hidden", isImport ? "false" : "true");
+    }
+    chatView.setAttribute("aria-hidden", isChat ? "false" : "true");
 
     modeDebugBtn.classList.toggle("active", isDebug);
-    modeChatBtn.classList.toggle("active", !isDebug);
+    modeChatBtn.classList.toggle("active", isChat);
+    if (modeImportBtn) {
+      modeImportBtn.classList.toggle("active", isImport);
+    }
 
     if (isDebug) {
       requestAnimationFrame(() => {
@@ -1639,6 +1678,72 @@
   if (modeDebugBtn && modeChatBtn) {
     modeDebugBtn.onclick = () => setMode("debug");
     modeChatBtn.onclick = () => setMode("chat");
+  }
+  if (modeImportBtn) {
+    modeImportBtn.onclick = () => setMode("import");
+  }
+
+  function updateImportVisibility() {
+    if (!importAdapterSelect || !importFileGroup || !importDatasetGroup) return;
+    const adapter = importAdapterSelect.value;
+    const isFreebase = adapter === "freebasekg";
+    importFileGroup.classList.toggle("hidden", isFreebase);
+    importDatasetGroup.classList.toggle("hidden", !isFreebase);
+  }
+
+  if (importAdapterSelect) {
+    importAdapterSelect.onchange = updateImportVisibility;
+  }
+  updateImportVisibility();
+
+  if (importForm) {
+    importForm.onsubmit = async (event) => {
+      event.preventDefault();
+      if (!importAdapterSelect) return;
+      const adapter = importAdapterSelect.value;
+      const label = importLabelInput ? importLabelInput.value.trim() : "";
+      const formData = new FormData();
+      formData.append("adapter", adapter);
+      if (label) formData.append("label", label);
+
+      if (adapter === "freebasekg") {
+        const datasetName = importDatasetInput ? importDatasetInput.value.trim() : "";
+        formData.append("dataset_name", datasetName || "rmanluo/RoG-webqsp");
+      } else {
+        const files = importFilesInput ? importFilesInput.files : null;
+        if (!files || !files.length) {
+          if (importStatus) importStatus.textContent = "Select files to upload.";
+          return;
+        }
+        Array.from(files).forEach((file) => {
+          const relPath = file.webkitRelativePath || file.name;
+          formData.append("files", file, relPath);
+        });
+      }
+
+      if (importStatus) importStatus.textContent = "Importing graph...";
+      const submitBtn = document.getElementById("import-submit");
+      if (submitBtn) submitBtn.disabled = true;
+
+      try {
+        const res = await fetch("/api/import", { method: "POST", body: formData });
+        const payload = await res.json();
+        if (!res.ok) {
+          throw new Error(payload.error || "Import failed.");
+        }
+        if (importStatus) {
+          importStatus.textContent = `Imported ${payload.label || payload.name}.`;
+        }
+        await refreshGraphSelect(payload.active || "");
+        if (chatGraphSelect && payload.active) {
+          chatGraphSelect.value = payload.active;
+        }
+      } catch (err) {
+        if (importStatus) importStatus.textContent = `Import failed: ${err.message}`;
+      } finally {
+        if (submitBtn) submitBtn.disabled = false;
+      }
+    };
   }
 
   if (replaySlider) {

@@ -4,12 +4,15 @@ import argparse
 import json
 import mimetypes
 import os
+import shutil
 import threading
 import time
 import uuid
+import zipfile
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from tempfile import mkdtemp
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 from urllib.parse import parse_qs, urlparse
 
@@ -557,6 +560,15 @@ class LiveGraphVisualizer:
             return None
         return candidate
 
+    @staticmethod
+    def _make_unique_name(existing: Dict[str, Any], base: str) -> str:
+        if base not in existing:
+            return base
+        suffix = 2
+        while f"{base}_{suffix}" in existing:
+            suffix += 1
+        return f"{base}_{suffix}"
+
     def _make_handler(self):
         visualizer = self
 
@@ -620,6 +632,66 @@ class LiveGraphVisualizer:
                 if not isinstance(payload, dict):
                     raise ValueError("JSON body must be an object")
                 return payload
+
+            def _parse_multipart(self) -> Tuple[Dict[str, str], List[Dict[str, Any]]]:
+                content_type = self.headers.get("Content-Type", "")
+                if "multipart/form-data" not in content_type:
+                    raise ValueError("Expected multipart/form-data")
+                boundary_token = "boundary="
+                if boundary_token not in content_type:
+                    raise ValueError("Missing multipart boundary")
+                boundary = content_type.split(boundary_token, 1)[1].strip()
+                if boundary.startswith('"') and boundary.endswith('"'):
+                    boundary = boundary[1:-1]
+                if not boundary:
+                    raise ValueError("Invalid multipart boundary")
+
+                length_raw = self.headers.get("Content-Length", "0")
+                try:
+                    length = int(length_raw)
+                except ValueError:
+                    raise ValueError("Invalid Content-Length")
+                raw = self.rfile.read(length)
+                if not raw:
+                    return {}, []
+
+                delimiter = f"--{boundary}".encode("utf-8")
+                parts = raw.split(delimiter)
+                fields: Dict[str, str] = {}
+                files: List[Dict[str, Any]] = []
+
+                for part in parts[1:-1]:
+                    part = part.strip(b"\r\n")
+                    if not part:
+                        continue
+                    if b"\r\n\r\n" not in part:
+                        continue
+                    header_block, data = part.split(b"\r\n\r\n", 1)
+                    data = data.rstrip(b"\r\n")
+                    headers: Dict[str, str] = {}
+                    for line in header_block.split(b"\r\n"):
+                        if b":" not in line:
+                            continue
+                        key, value = line.split(b":", 1)
+                        headers[key.decode("utf-8").strip().lower()] = value.decode("utf-8").strip()
+                    disposition = headers.get("content-disposition", "")
+                    if "form-data" not in disposition:
+                        continue
+                    name = ""
+                    filename = None
+                    for segment in disposition.split(";"):
+                        segment = segment.strip()
+                        if segment.startswith("name="):
+                            name = segment.split("=", 1)[1].strip().strip('"')
+                        elif segment.startswith("filename="):
+                            filename = segment.split("=", 1)[1].strip().strip('"')
+                    if not name:
+                        continue
+                    if filename is not None and filename != "":
+                        files.append({"name": name, "filename": filename, "data": data})
+                    else:
+                        fields[name] = data.decode("utf-8", errors="replace")
+                return fields, files
 
             def do_GET(self) -> None:
                 parsed = urlparse(self.path)
@@ -805,6 +877,93 @@ class LiveGraphVisualizer:
 
                     self._write_json({"ok": True, **result})
                     return
+
+                if path == "/api/import":
+                    try:
+                        fields, files = self._parse_multipart()
+                    except ValueError as exc:
+                        self._write_json({"error": str(exc)}, status=400)
+                        return
+
+                    adapter_key = (fields.get("adapter") or "").strip()
+                    if not adapter_key:
+                        self._write_json({"error": "adapter is required"}, status=400)
+                        return
+
+                    label = (fields.get("label") or adapter_key).strip()
+                    dataset_name = (fields.get("dataset_name") or "rmanluo/RoG-webqsp").strip()
+
+                    importer_path = _ADAPTER_IMPORTERS.get(adapter_key)
+                    if importer_path is None:
+                        self._write_json(
+                            {"error": f"Unknown adapter key {adapter_key!r}.", "valid": list(_ADAPTER_IMPORTERS)},
+                            status=400,
+                        )
+                        return
+
+                    source_path: Union[str, Path]
+                    temp_dir: Optional[Path] = None
+                    try:
+                        if adapter_key == "freebasekg":
+                            source_path = dataset_name
+                        else:
+                            if not files:
+                                self._write_json(
+                                    {"error": "No files uploaded for import.", "adapter": adapter_key},
+                                    status=400,
+                                )
+                                return
+
+                            temp_dir = Path(mkdtemp(prefix="graph_import_"))
+                            for file_item in files:
+                                filename = str(file_item.get("filename") or "upload.bin")
+                                rel = Path(filename)
+                                safe_parts = [p for p in rel.parts if p not in {"", ".", ".."}]
+                                safe_rel = Path(*safe_parts) if safe_parts else Path(rel.name)
+                                dest = (temp_dir / safe_rel).resolve()
+                                if temp_dir not in dest.parents and dest != temp_dir:
+                                    self._write_json({"error": "Invalid upload path"}, status=400)
+                                    return
+                                dest.parent.mkdir(parents=True, exist_ok=True)
+                                dest.write_bytes(file_item["data"])
+
+                            source_path = temp_dir
+                            zip_files = [p for p in temp_dir.glob("**/*.zip") if p.is_file()]
+                            if len(zip_files) == 1 and zip_files[0].parent == temp_dir:
+                                zip_path = zip_files[0]
+                                with zipfile.ZipFile(zip_path, "r") as zf:
+                                    zf.extractall(temp_dir)
+                                zip_path.unlink(missing_ok=True)
+
+                            children = [p for p in temp_dir.iterdir() if p.name != ".DS_Store"]
+                            if len(children) == 1 and children[0].is_dir():
+                                source_path = children[0]
+
+                        module_path, fn_name = importer_path.rsplit(".", 1)
+                        mod = __import__(module_path, fromlist=[fn_name])
+                        import_fn = getattr(mod, fn_name)
+                        graph = import_fn(source_path)
+
+                        with visualizer._lock:
+                            name = LiveGraphVisualizer._make_unique_name(visualizer._graphs, label or adapter_key)
+                            visualizer.register_graph(name, graph, label=label)
+                            visualizer.switch_graph(name)
+
+                        self._write_json(
+                            {
+                                "ok": True,
+                                "name": name,
+                                "label": label,
+                                "active": name,
+                                "graphs": visualizer.list_graphs(),
+                            }
+                        )
+                        return
+                    except Exception as exc:
+                        if temp_dir is not None and temp_dir.exists():
+                            shutil.rmtree(temp_dir, ignore_errors=True)
+                        self._write_json({"error": str(exc)}, status=400)
+                        return
 
                 if path == "/api/graph/switch":
                     name = payload.get("name")
@@ -1088,6 +1247,54 @@ def serve_g_retriever(
         default_hops=default_hops,
     )
 
+def serve_expla_graphs(
+    source_path: Union[str, Path],
+    *,
+    name: str = "expla_graphs",
+    label: str = "Expla Graphs",
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    poll_interval_ms: int = 600,
+    default_hops: int = 1,
+) -> LiveGraphVisualizer:
+    """Serve an expla_graphs TSV (train_dev.tsv) graph."""
+    from ..adapters.expla_graphs import import_graph_from_expla_graphs
+
+    graph = import_graph_from_expla_graphs(source_path)
+    return serve_graph(
+        graph,
+        name=name,
+        label=label,
+        host=host,
+        port=port,
+        poll_interval_ms=poll_interval_ms,
+        default_hops=default_hops,
+    )
+
+def serve_freebasekg(
+    source_path: Union[str, Path],
+    *,
+    name: str = "freebasekg",
+    label: str = "Freebase KG",
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    poll_interval_ms: int = 600,
+    default_hops: int = 1,
+) -> LiveGraphVisualizer:
+    """Serve a Freebase KG graph from the RoG-webqsp dataset on Hugging Face."""
+    from ..adapters.freebasekg import import_graph_from_freebasekg
+
+    graph = import_graph_from_freebasekg(source_path)
+    return serve_graph(
+        graph,
+        name=name,
+        label=label,
+        host=host,
+        port=port,
+        poll_interval_ms=poll_interval_ms,
+        default_hops=default_hops,
+    )
+
 def serve_tog(
     source_path: Union[str, Path],
     *,
@@ -1117,6 +1324,8 @@ _ADAPTER_IMPORTERS: Dict[str, str] = {
     "lightrag": "..adapters.lightrag.import_graph_from_lightrag",
     "hipporag": "..adapters.hipporag.import_graph_from_hipporag",
     "g_retriever": "..adapters.g_retriever.import_graph_from_g_retriever",
+    "expla_graphs": "..adapters.expla_graphs.import_graph_from_expla_graphs",
+    "freebasekg": "..adapters.freebasekg.import_graph_from_freebasekg",
     "tog": "..adapters.tog.import_graph_from_tog",
 }
 
@@ -1125,6 +1334,8 @@ _ADAPTER_DEFAULT_LABELS: Dict[str, str] = {
     "lightrag": "LightRAG",
     "hipporag": "HippoRAG",
     "g_retriever": "G-Retriever",
+    "expla_graphs": "Expla Graphs",
+    "freebasekg": "Freebase KG",
     "tog": "Think-on-Graph",
 }
 
@@ -1142,7 +1353,7 @@ def serve_multi(
     ``graphs`` is a mapping from a human-readable graph *name* to either:
 
     * A ``(adapter_key, source_path)`` tuple, where *adapter_key* is one of
-      ``"fastinsight"``, ``"lightrag"``, ``"hipporag"``, ``"g_retriever"``, ``"tog"``.
+      ``"fastinsight"``, ``"lightrag"``, ``"hipporag"``, ``"g_retriever"``, ``"expla_graphs"``, ``"freebasekg"``, ``"tog"``.
     * A ``(adapter_key, source_path, label)`` tuple for a custom display label.
     * An already-loaded :class:`~GraphContainer.core.SimpleGraphContainer` instance.
 
@@ -1153,6 +1364,8 @@ def serve_multi(
                 "LightRAG":    ("lightrag",    "/data/lightrag"),
                 "HippoRAG":    ("hipporag",    "/data/hipporag"),
                 "G-Retriever": ("g_retriever", "/data/g_retriever"),
+                "Expla Graphs": ("expla_graphs", "/data/expla_graphs"),
+                "Freebase KG": ("freebasekg", "/data/freebasekg"),
                 "ToG":         ("tog",          "/data/tog"),
             },
             port=8765,
@@ -1218,6 +1431,8 @@ def _main() -> None:
     python -m GraphContainer.visualizer.live_visualizer --format lightrag --source /data/lightrag
     python -m GraphContainer.visualizer.live_visualizer --format hipporag --source /data/hipporag
     python -m GraphContainer.visualizer.live_visualizer --format g_retriever --source /data/g_retriever
+    python -m GraphContainer.visualizer.live_visualizer --format expla_graphs --source /data/expla_graphs
+    python -m GraphContainer.visualizer.live_visualizer --format freebasekg --source rmanluo/RoG-webqsp
     python -m GraphContainer.visualizer.live_visualizer --format tog --source /data/tog
 
     # Multiple formats at once (specify --graph format:path pairs)
@@ -1225,13 +1440,15 @@ def _main() -> None:
         --graph lightrag:/data/lightrag \\
         --graph hipporag:/data/hipporag \\
         --graph g_retriever:/data/g_retriever \\
+        --graph expla_graphs:/data/expla_graphs \\
+        --graph freebasekg:rmanluo/RoG-webqsp \\
         --graph tog:/data/tog
     """,
     )
     parser.add_argument(
         "--format",
         default=None,
-        choices=["lightrag", "hipporag", "g_retriever", "tog", "fastinsight"],
+        choices=["lightrag", "hipporag", "g_retriever", "expla_graphs", "freebasekg", "tog", "fastinsight"],
         help="Graph adapter format (use with --source for a single graph)",
     )
     parser.add_argument(
@@ -1247,7 +1464,7 @@ def _main() -> None:
         default=[],
         help=(
             "Register a graph as FORMAT:PATH (repeatable). "
-            "FORMAT is one of: lightrag, hipporag, g_retriever, tog, fastinsight. "
+            "FORMAT is one of: lightrag, hipporag, g_retriever, expla_graphs, freebasekg, tog, fastinsight. "
             "Example: --graph lightrag:/data/lr --graph hipporag:/data/hr"
         ),
     )
@@ -1271,6 +1488,8 @@ def _main() -> None:
         "lightrag": serve_lightrag,
         "hipporag": serve_hipporag,
         "g_retriever": serve_g_retriever,
+        "expla_graphs": serve_expla_graphs,
+        "freebasekg": serve_freebasekg,
         "tog": serve_tog,
         "fastinsight": serve_fastinsight,
     }
