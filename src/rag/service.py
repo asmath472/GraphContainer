@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import os
 from dataclasses import replace
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional
 
 from ..core import SearchableGraphContainer
 from .contracts import ChatRequest
-from .embeddings import EmbedderRouter
+from .embeddings import EmbeddingService
 from .generator import OpenAIChatGenerator
 from .pipeline import GraphRAGPipeline
 from .retrievers import HybridRetriever, OneHopRetriever, VectorRetriever
@@ -19,21 +18,31 @@ class GraphRAGService:
         *,
         visualizer: Optional[Any] = None,
         pipeline: Optional[GraphRAGPipeline] = None,
+        default_chat_model: str = "gpt-5-nano",
+        default_embedding_provider: str = "hf",
+        default_hf_embedding_model: str = "BAAI/bge-m3",
+        default_openai_embedding_model: str = "text-embedding-3-small",
+        hf_embedding_models: Optional[Iterable[str]] = None,
+        openai_embedding_models: Optional[Iterable[str]] = None,
+        embedding_model_catalog: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.graph = graph
         self.visualizer = visualizer
 
         if pipeline is None:
-            embedder = EmbedderRouter(
-                default_provider=os.getenv("GRAPH_RAG_EMBEDDER", "bge"),
-                default_bge_model=os.getenv("GRAPH_RAG_BGE_MODEL", "BAAI/bge-m3"),
-                default_openai_model=os.getenv("GRAPH_RAG_OPENAI_EMBED_MODEL", "text-embedding-3-small"),
+            embedding_service = EmbeddingService(
+                default_provider=default_embedding_provider,
+                default_hf_model=default_hf_embedding_model,
+                default_openai_model=default_openai_embedding_model,
+                hf_models=hf_embedding_models,
+                openai_models=openai_embedding_models,
+                model_catalog=embedding_model_catalog,
             )
             generator = OpenAIChatGenerator(
-                default_model=os.getenv("GRAPH_RAG_CHAT_MODEL", "gpt-5-nano"),
+                default_model=default_chat_model,
             )
             pipeline = GraphRAGPipeline(
-                embedder=embedder,
+                embedding_service=embedding_service,
                 generator=generator,
                 retrievers={
                     "one-hop": OneHopRetriever(),
@@ -48,6 +57,20 @@ class GraphRAGService:
                 },
             )
         self.pipeline = pipeline
+
+    def list_embedding_options(self) -> Dict[str, Any]:
+        embedding_service = getattr(self.pipeline, "embedding_service", None)
+        if embedding_service is not None and hasattr(embedding_service, "list_options"):
+            payload = embedding_service.list_options()
+            if isinstance(payload, dict):
+                return payload
+        return {
+            "default_provider": "hf",
+            "default_model": "BAAI/bge-m3",
+            "default_value": "hf:BAAI/bge-m3",
+            "providers": [],
+            "options": [],
+        }
 
     def chat(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         if not hasattr(self.graph, "search"):
@@ -68,6 +91,7 @@ class GraphRAGService:
                             "retrieval": request.retrieval,
                             "embedding_provider": request.embedding_provider,
                             "embedding_model": request.embedding_model,
+                            "embedding_error_policy": request.embedding_error_policy,
                         }
                     )
             else:
@@ -79,6 +103,7 @@ class GraphRAGService:
                             "retrieval": request.retrieval,
                             "embedding_provider": request.embedding_provider,
                             "embedding_model": request.embedding_model,
+                            "embedding_error_policy": request.embedding_error_policy,
                         }
                     )
                 else:
@@ -92,6 +117,7 @@ class GraphRAGService:
                     "retrieval": request.retrieval,
                     "embedding_provider": request.embedding_provider,
                     "embedding_model": request.embedding_model,
+                    "embedding_error_policy": request.embedding_error_policy,
                 },
                 progress={"current": 0, "total": 100, "message": "Starting graph retrieval"},
             )
@@ -111,6 +137,7 @@ class GraphRAGService:
                     "retrieval": request.retrieval,
                     "embedding_provider": request.embedding_provider,
                     "embedding_model": request.embedding_model,
+                    "embedding_error_policy": request.embedding_error_policy,
                     "llm_answer": response.answer,
                 },
                 progress={"current": 100, "total": 100, "message": "Answer generated"},

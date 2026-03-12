@@ -1,5 +1,5 @@
 from .contracts import ChatMessage, ChatRequest, ChatResponse, RetrievedNode, RetrievalResult
-from .embeddings import BGEEmbedder, EmbedderRouter, OpenAIEmbedder
+from .embeddings import BGEEmbedder, EmbeddingService, HuggingFaceEmbedder, OpenAIEmbedder
 from .generator import OpenAIChatGenerator
 from .pipeline import GraphRAGPipeline
 from .retrievers import BaseRetriever, HybridRetriever, OneHopRetriever, VectorRetriever
@@ -12,7 +12,8 @@ __all__ = [
     "RetrievedNode",
     "RetrievalResult",
     "BGEEmbedder",
-    "EmbedderRouter",
+    "HuggingFaceEmbedder",
+    "EmbeddingService",
     "OpenAIEmbedder",
     "OpenAIChatGenerator",
     "GraphRAGPipeline",

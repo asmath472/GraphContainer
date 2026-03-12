@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional
 
 from ...core import SearchableGraphContainer
 from ..contracts import RetrievedNode, RetrievalResult
@@ -19,6 +19,51 @@ def _dedup_preserve_order(items: List[str]) -> List[str]:
     return output
 
 
+def _normalize_error_policy(value: Any) -> str:
+    policy = str(value or "raise").strip().lower()
+    if policy in {"fallback", "soft"}:
+        return "fallback"
+    return "raise"
+
+
+def _embed_query(
+    *,
+    query: str,
+    embedding_service: Optional[Any],
+    embedding_provider: str,
+    embedding_model: str,
+    embedding_error_policy: str,
+    visualizer: Optional[Any],
+    session_id: Optional[str],
+    retriever_name: str,
+) -> List[float]:
+    if embedding_service is None:
+        return []
+
+    try:
+        vector = embedding_service.embed(
+            query,
+            provider=embedding_provider,
+            model=embedding_model,
+        )
+        return [float(x) for x in vector]
+    except Exception as exc:
+        message = (
+            "Embedding failed "
+            f"(provider={embedding_provider}, model={embedding_model}, retrieval={retriever_name}, "
+            f"error={type(exc).__name__}: {exc})"
+        )
+        if visualizer is not None and session_id:
+            visualizer.update_session(
+                session_id,
+                metadata={"embedding_error": message},
+                progress={"current": 22, "total": 100, "message": "Embedding failed"},
+            )
+        if _normalize_error_policy(embedding_error_policy) == "fallback":
+            return []
+        raise RuntimeError(message) from exc
+
+
 class OneHopRetriever(BaseRetriever):
     name = "one-hop"
 
@@ -26,10 +71,10 @@ class OneHopRetriever(BaseRetriever):
         self,
         graph: SearchableGraphContainer,
         query: str,
-        query_vector: Sequence[float],
         *,
         index_name: str,
         top_k: int,
+        embedding_service: Optional[Any] = None,
         session_id: Optional[str] = None,
         visualizer: Optional[Any] = None,
         **kwargs: Any,
@@ -45,6 +90,19 @@ class OneHopRetriever(BaseRetriever):
 
         seed_ids: List[str] = []
         seed_score_by_id: Dict[str, Optional[float]] = {}
+        embedding_provider = str(kwargs.pop("embedding_provider", "hf")).strip().lower()
+        embedding_model = str(kwargs.pop("embedding_model", "BAAI/bge-m3")).strip()
+        embedding_error_policy = kwargs.pop("embedding_error_policy", "raise")
+        query_vector = _embed_query(
+            query=query,
+            embedding_service=embedding_service,
+            embedding_provider=embedding_provider,
+            embedding_model=embedding_model,
+            embedding_error_policy=str(embedding_error_policy),
+            visualizer=visualizer,
+            session_id=session_id,
+            retriever_name=self.name,
+        )
 
         if query_vector:
             # ── Vector search path (normal) ──────────────────────────────

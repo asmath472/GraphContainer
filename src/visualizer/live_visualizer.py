@@ -723,6 +723,20 @@ class LiveGraphVisualizer:
                     return
 
                 if path == "/api/config":
+                    embedding_catalog: Dict[str, Any] = {
+                        "default_value": "hf:BAAI/bge-m3",
+                        "options": [],
+                    }
+                    try:
+                        service = visualizer._ensure_chat_service()
+                        if hasattr(service, "list_embedding_options"):
+                            payload = service.list_embedding_options()
+                            if isinstance(payload, dict):
+                                embedding_catalog = payload
+                    except Exception:
+                        # Non-fatal: UI can still use static fallback options.
+                        pass
+
                     self._write_json(
                         {
                             "poll_interval_ms": visualizer.poll_interval_ms,
@@ -730,6 +744,7 @@ class LiveGraphVisualizer:
                             "chat_enabled": True,
                             "default_chat_retrieval": "one-hop",
                             "graphs": visualizer.list_graphs(),
+                            "embedding_catalog": embedding_catalog,
                         }
                     )
                     return

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Optional, Sequence
+from typing import Any, Optional
 
 from ...core import SearchableGraphContainer
 from ..contracts import RetrievalResult
@@ -14,10 +14,10 @@ class VectorRetriever(BaseRetriever):
         self,
         graph: SearchableGraphContainer,
         query: str,
-        query_vector: Sequence[float],
         *,
         index_name: str,
         top_k: int,
+        embedding_service: Optional[Any] = None,
         session_id: Optional[str] = None,
         visualizer: Optional[Any] = None,
         **kwargs: Any,
