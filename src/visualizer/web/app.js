@@ -56,9 +56,18 @@
       autoResize: true,
       physics: {
         enabled: true,
-        solver: "repulsion",
-        repulsion: { nodeDistance: 150, centralGravity: 0.1 },
-        stabilization: { iterations: 150, updateInterval: 25 },
+        solver: "barnesHut",
+        barnesHut: {
+          gravitationalConstant: -26000,
+          centralGravity: 0.28,
+          springLength: 120,
+          springConstant: 0.04,
+          damping: 0.27,
+          avoidOverlap: 0.2,
+        },
+        stabilization: { iterations: 60, updateInterval: 40 },
+        adaptiveTimestep: true,
+        timestep: 0.75,
       },
       interaction: {
         hover: true,
@@ -808,9 +817,18 @@
         interaction: { dragNodes: false, dragView: true, zoomView: true, hover: true },
         physics: {
           enabled: true,
-          solver: "repulsion",
-          repulsion: { nodeDistance: 70, centralGravity: 0.25 },
-          stabilization: { iterations: 80, updateInterval: 20 },
+          solver: "barnesHut",
+          barnesHut: {
+            gravitationalConstant: -14000,
+            centralGravity: 0.35,
+            springLength: 60,
+            springConstant: 0.045,
+            damping: 0.3,
+            avoidOverlap: 0.15,
+          },
+          stabilization: { iterations: 28, updateInterval: 24 },
+          adaptiveTimestep: true,
+          timestep: 0.9,
         },
         nodes: {
           shape: "dot",
@@ -960,9 +978,18 @@
         renderer.network.setOptions({
           physics: {
             enabled: true,
-            solver: "repulsion",
-            repulsion: { nodeDistance: 70, centralGravity: 0.25 },
-            stabilization: { iterations: 80, updateInterval: 20 },
+            solver: "barnesHut",
+            barnesHut: {
+              gravitationalConstant: -14000,
+              centralGravity: 0.35,
+              springLength: 60,
+              springConstant: 0.045,
+              damping: 0.3,
+              avoidOverlap: 0.15,
+            },
+            stabilization: { iterations: 28, updateInterval: 24 },
+            adaptiveTimestep: true,
+            timestep: 0.9,
           },
         });
         if (typeof renderer.network.stabilize === "function") {
