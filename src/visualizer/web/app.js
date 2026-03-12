@@ -76,6 +76,44 @@
   );
 
   let hops = 2;
+  function normalizeEmbeddingOption(rawOption) {
+    if (!rawOption || typeof rawOption !== "object") return null;
+    const provider = String(rawOption.provider || "").trim().toLowerCase();
+    const model = String(rawOption.model || "").trim();
+    if (!provider || !model) return null;
+    const value = `${provider}:${model}`;
+    const label = String(rawOption.label || `Embedding: ${provider}/${model}`);
+    return { provider, model, value, label };
+  }
+
+  function applyEmbeddingCatalog(catalog) {
+    if (!chatEmbeddingSelect || !catalog || typeof catalog !== "object") return;
+    const rawOptions = Array.isArray(catalog.options) ? catalog.options : [];
+    const options = rawOptions.map(normalizeEmbeddingOption).filter(Boolean);
+    if (!options.length) return;
+
+    const selectedBefore = String(chatEmbeddingSelect.value || "").trim();
+    const defaultValue = String(catalog.default_value || "").trim();
+    chatEmbeddingSelect.innerHTML = "";
+
+    for (const item of options) {
+      const opt = document.createElement("option");
+      opt.value = item.value;
+      opt.textContent = item.label;
+      chatEmbeddingSelect.appendChild(opt);
+    }
+
+    const hasSelected = options.some((item) => item.value === selectedBefore);
+    const hasDefault = options.some((item) => item.value === defaultValue);
+    if (hasSelected) {
+      chatEmbeddingSelect.value = selectedBefore;
+    } else if (hasDefault) {
+      chatEmbeddingSelect.value = defaultValue;
+    } else {
+      chatEmbeddingSelect.value = options[0].value;
+    }
+  }
+
   try {
     const configRes = await fetch("/api/config");
     const config = configRes.ok ? await configRes.json() : { default_hops: 2 };
@@ -92,6 +130,7 @@
         chatGraphSelect.appendChild(opt);
       }
     }
+    applyEmbeddingCatalog(config.embedding_catalog);
   } catch (_) {
     hops = 2;
   }
@@ -1417,7 +1456,7 @@
         }, MINI_SESSION_POLL_MS);
       }
 
-      let embeddingProvider = "bge";
+      let embeddingProvider = "hf";
       let embeddingModel = "BAAI/bge-m3";
       if (session.embedding && typeof session.embedding === "string") {
         const rawEmbedding = session.embedding.trim();
@@ -1475,7 +1514,7 @@
       }
     } catch (error) {
       const message = error && error.message ? error.message : String(error);
-      retrievalAssistant.text = "Retrieval failed.";
+      retrievalAssistant.text = `Retrieval failed: ${message}`;
       ensureAnswerAssistant();
       answerAssistant.text = `Error: ${message}`;
     } finally {

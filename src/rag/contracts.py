@@ -25,8 +25,9 @@ class ChatRequest:
     graph: str = "default"
     model: str = "gpt-5-nano"
     retrieval: str = "one-hop"
-    embedding_provider: str = "bge"
+    embedding_provider: str = "hf"
     embedding_model: str = "BAAI/bge-m3"
+    embedding_error_policy: str = "raise"
     top_k: int = 5
     index_name: str = "node_vector"
     session_id: Optional[str] = None
@@ -60,13 +61,27 @@ class ChatRequest:
         if session_id is not None:
             session_id = str(session_id).strip() or None
 
-        embedding_provider = str(payload.get("embedding_provider", payload.get("embedder", "bge"))).strip().lower()
+        embedding_provider = str(payload.get("embedding_provider", payload.get("embedder", "hf"))).strip().lower()
         embedding_model = str(payload.get("embedding_model", "BAAI/bge-m3")).strip()
+        embedding_error_policy = str(payload.get("embedding_error_policy", "raise")).strip().lower()
+        if embedding_error_policy in {"error", "fail", "strict"}:
+            embedding_error_policy = "raise"
+        elif embedding_error_policy in {"fallback", "soft"}:
+            embedding_error_policy = "fallback"
+        else:
+            embedding_error_policy = "raise"
 
         embedding_payload = payload.get("embedding")
         if isinstance(embedding_payload, dict):
             embedding_provider = str(embedding_payload.get("provider", embedding_provider)).strip().lower()
             embedding_model = str(embedding_payload.get("model", embedding_model)).strip()
+            raw_policy = embedding_payload.get("error_policy")
+            if raw_policy is not None:
+                normalized_policy = str(raw_policy).strip().lower()
+                if normalized_policy in {"error", "fail", "strict", "raise"}:
+                    embedding_error_policy = "raise"
+                elif normalized_policy in {"fallback", "soft"}:
+                    embedding_error_policy = "fallback"
         elif isinstance(embedding_payload, str):
             raw = embedding_payload.strip()
             if ":" in raw:
@@ -82,8 +97,9 @@ class ChatRequest:
             graph=str(payload.get("graph", "default")),
             model=str(payload.get("model", "gpt-5-nano")),
             retrieval=str(payload.get("retrieval", "one-hop")),
-            embedding_provider=embedding_provider or "bge",
+            embedding_provider=embedding_provider or "hf",
             embedding_model=embedding_model or "BAAI/bge-m3",
+            embedding_error_policy=embedding_error_policy,
             top_k=top_k,
             index_name=str(payload.get("index_name", "node_vector")),
             session_id=session_id,

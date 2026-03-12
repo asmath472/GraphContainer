@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Optional, Sequence, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 
 from ...core import SearchableGraphContainer
 from ..contracts import RetrievalResult
@@ -18,10 +18,10 @@ class BaseRetriever(ABC):
         self,
         graph: SearchableGraphContainer,
         query: str,
-        query_vector: Sequence[float],
         *,
         index_name: str,
         top_k: int,
+        embedding_service: Optional[Any] = None,
         session_id: Optional[str] = None,
         visualizer: Optional["LiveGraphVisualizer"] = None,
         **kwargs: Any,
