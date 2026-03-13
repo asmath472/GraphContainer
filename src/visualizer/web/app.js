@@ -1227,6 +1227,27 @@
     bodyEl.id = `msg-body-${messageId}`;
     bodyEl.textContent = String(message.text || "");
 
+    let elapsedEl = msgEl.querySelector(".msg-elapsed");
+    const elapsed = message && message.elapsed && typeof message.elapsed === "object" ? message.elapsed : null;
+    if (
+      elapsed &&
+      (String(elapsed.retrieval || "").trim() || String(elapsed.generation || "").trim())
+    ) {
+      if (!elapsedEl) {
+        elapsedEl = document.createElement("div");
+        elapsedEl.className = "msg-elapsed";
+        msgEl.appendChild(elapsedEl);
+      }
+      const retrievalValue = String(elapsed.retrieval || "").trim() || "n/a";
+      const generationValue = String(elapsed.generation || "").trim() || "n/a";
+      elapsedEl.innerHTML = [
+        `<span class="elapsed-chip"><span class="elapsed-label">retrieval</span><span class="elapsed-value">${retrievalValue}</span></span>`,
+        `<span class="elapsed-chip"><span class="elapsed-label">generation</span><span class="elapsed-value">${generationValue}</span></span>`,
+      ].join("");
+    } else if (elapsedEl) {
+      elapsedEl.remove();
+    }
+
     const hasMiniGraph = message.role === "assistant" && Boolean(message.visualSessionId);
     let miniWrap = msgEl.querySelector(".msg-mini-session-wrap");
     if (hasMiniGraph) {
@@ -1504,10 +1525,7 @@
       if (retrievalFinishedAt === null) {
         retrievalFinishedAt = performance.now();
       }
-      const retrievalElapsed = formatElapsed(retrievalFinishedAt - retrievalStartedAt);
-      retrievalAssistant.text = retrievalElapsed
-        ? `Retrieval complete (${retrievalElapsed}).`
-        : "Retrieval complete.";
+      retrievalAssistant.text = "Retrieval complete.";
       updateMessageBodyText(retrievalAssistant.id, retrievalAssistant.text);
 
       ensureAnswerAssistant();
@@ -1628,7 +1646,11 @@
       if (retrievalElapsedText || generationElapsedText) {
         const retrievalPart = retrievalElapsedText || "n/a";
         const generationPart = generationElapsedText || "n/a";
-        retrievalAssistant.text = `Elapsed time - Retrieval: ${retrievalPart} | Generation: ${generationPart}`;
+        retrievalAssistant.elapsed = {
+          retrieval: retrievalPart,
+          generation: generationPart,
+        };
+        retrievalAssistant.text = "Retrieval complete.";
         updateMessageBodyText(retrievalAssistant.id, retrievalAssistant.text);
       }
       if (data.session_id) {

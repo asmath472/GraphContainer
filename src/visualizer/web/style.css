@@ -850,6 +850,52 @@ body {
   margin-left: auto;
 }
 
+.msg-elapsed {
+  margin-top: 8px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  background: rgba(148, 163, 184, 0.1);
+  color: #9ca3af;
+  font-family: "Orbitron", "Fira Code", monospace;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.msg-elapsed .elapsed-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.msg-elapsed .elapsed-label {
+  color: #6b7280;
+}
+
+.msg-elapsed .elapsed-value {
+  color: #cbd5e1;
+  font-weight: 600;
+}
+
+:root[data-theme="light"] .msg-elapsed {
+  background: rgba(148, 163, 184, 0.12);
+  border-color: rgba(100, 116, 139, 0.25);
+  color: #64748b;
+}
+
+:root[data-theme="light"] .msg-elapsed .elapsed-label {
+  color: #94a3b8;
+}
+
+:root[data-theme="light"] .msg-elapsed .elapsed-value {
+  color: #475569;
+}
+
 .msg-mini-session-wrap {
   margin-top: 10px;
   padding: 8px;
