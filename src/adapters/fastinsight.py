@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 from typing import Any, Dict, Iterator, Optional, Tuple
@@ -8,7 +9,7 @@ from ..core import SearchableGraphContainer, SimpleGraphContainer
 from ..types import EdgeRecord, NodeRecord
 from ..utils import container_or_new
 from .base import GraphAdapter, GraphAdapterError, UnsupportedSourceError
-from .indexers import ChromaCollectionIndexer
+from ..indexers import ChromaCollectionIndexer
 
 
 def _normalize_source(source: Any) -> Path:

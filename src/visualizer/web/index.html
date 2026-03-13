@@ -118,7 +118,14 @@
                                 <option value="one-hop">RAG: One-Hop</option>
                                 <option value="vector">RAG: Vector</option>
                                 <option value="hybrid">RAG: Hybrid</option>
+                                <option value="fastinsight">RAG: FastInsight</option>
                             </select>
+                        </div>
+                        <div id="chat-retrieval-warning" class="chat-retrieval-warning hidden" role="alert" aria-live="polite" aria-hidden="true">
+                            <span class="chat-retrieval-warning-icon" aria-hidden="true">⚠</span>
+                            <span id="chat-retrieval-warning-text">
+                                FastInsight requires a dense vector index (`node_vector`). Select another retrieval method or switch to a graph with a dense index.
+                            </span>
                         </div>
                     </header>
                     <div class="chat-thread" id="chat-thread" style="padding: 12px 14px;"></div>

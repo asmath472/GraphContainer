@@ -761,6 +761,28 @@ body {
   box-shadow: 0 0 0 3px rgba(47, 111, 235, 0.14);
 }
 
+.chat-retrieval-warning {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 11px;
+  border: 1px solid rgba(245, 158, 11, 0.5);
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--text-main);
+  font-size: 11px;
+  line-height: 1.35;
+  box-sizing: border-box;
+}
+
+.chat-retrieval-warning-icon {
+  color: #f59e0b;
+  font-size: 14px;
+  line-height: 1;
+  margin-top: 1px;
+}
+
 #chat-title {
   margin: 0;
   margin-left: -4px;

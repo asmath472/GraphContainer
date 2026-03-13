@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, Optional
 
 from ..core import SearchableGraphContainer
@@ -39,9 +40,11 @@ class GraphRAGPipeline:
         request: ChatRequest,
         visualizer: Optional[Any] = None,
     ) -> ChatResponse:
+        total_start = time.perf_counter()
         retrieval_name = self._resolve_retrieval(request.retrieval)
         retriever = self.retrievers[retrieval_name]
 
+        retrieval_start = time.perf_counter()
         retrieval_result = retriever.retrieve(
             graph=graph,
             query=request.message,
@@ -54,18 +57,32 @@ class GraphRAGPipeline:
             embedding_model=request.embedding_model,
             embedding_error_policy=request.embedding_error_policy,
         )
+        retrieval_elapsed_ms = (time.perf_counter() - retrieval_start) * 1000.0
 
         if visualizer is not None and request.session_id:
             visualizer.update_session(
                 request.session_id,
+                metadata={"retrieval_elapsed_ms": round(retrieval_elapsed_ms, 2)},
                 progress={"current": 100, "total": 100, "message": "Generating answer"},
             )
 
+        generation_start = time.perf_counter()
         answer = self.generator.generate(
             question=request.message,
             history=request.history,
             context_chunks=retrieval_result.context_chunks,
             model=request.model,
+        )
+        generation_elapsed_ms = (time.perf_counter() - generation_start) * 1000.0
+        total_elapsed_ms = (time.perf_counter() - total_start) * 1000.0
+
+        response_metadata = dict(retrieval_result.metadata)
+        response_metadata.update(
+            {
+                "retrieval_elapsed_ms": round(retrieval_elapsed_ms, 2),
+                "generation_elapsed_ms": round(generation_elapsed_ms, 2),
+                "total_elapsed_ms": round(total_elapsed_ms, 2),
+            }
         )
 
         return ChatResponse(
@@ -75,5 +92,5 @@ class GraphRAGPipeline:
             context_chunks=retrieval_result.context_chunks,
             nodes=[node.to_dict() for node in retrieval_result.nodes],
             edges=list(retrieval_result.edges),
-            metadata=dict(retrieval_result.metadata),
+            metadata=response_metadata,
         )

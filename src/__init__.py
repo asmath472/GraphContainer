@@ -1,15 +1,13 @@
 from .base import BaseGraphContainer
 from .core import SearchableGraphContainer, SimpleGraphContainer
 from .index import BaseIndexer
+from .indexers import ChromaCollectionIndexer, InMemoryVectorIndexer, PGVectorIndexer
 from .types import EdgeRecord, NodeRecord
 from .adapters import (
-    ChromaCollectionIndexer,
     FastInsightAdapter,
     GraphAdapter,
     GraphAdapterError,
-    InMemoryVectorIndexer,
     LightRAGAdapter,
-    PGVectorIndexer,
     UnsupportedSourceError,
     import_graph_from_fastinsight,
     import_graph_from_lightrag,
@@ -43,6 +41,7 @@ from .rag import (
     ChatResponse,
     GraphRAGPipeline,
     GraphRAGService,
+    FastInsightRetriever,
     HybridRetriever,
     OneHopRetriever,
     OpenAIChatGenerator,
@@ -102,6 +101,7 @@ __all__ = [
     "OneHopRetriever",
     "VectorRetriever",
     "HybridRetriever",
+    "FastInsightRetriever",
     "GraphRAGPipeline",
     "GraphRAGService",
 ]
