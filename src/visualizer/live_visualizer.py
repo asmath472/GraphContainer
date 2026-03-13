@@ -120,17 +120,33 @@ class LiveGraphVisualizer:
             raise RuntimeError("No graph has been registered. Call register_graph() first.")
         return self._graphs[self._active_graph_name]["container"]
 
-    def list_graphs(self) -> List[Dict[str, str]]:
-        """Return [{name, label, active}] for all registered graphs."""
+    def list_graphs(self) -> List[Dict[str, Any]]:
+        """Return graph registry entries with active flag and index capabilities."""
         with self._lock:
-            return [
-                {
-                    "name": name,
-                    "label": info["label"],
-                    "active": name == self._active_graph_name,
-                }
-                for name, info in self._graphs.items()
-            ]
+            entries: List[Dict[str, Any]] = []
+            for name, info in self._graphs.items():
+                container = info.get("container")
+                index_names: List[str] = []
+                list_indexes = getattr(container, "list_indexes", None)
+                if callable(list_indexes):
+                    try:
+                        raw_indexes = list_indexes()
+                    except Exception:
+                        raw_indexes = []
+                    if isinstance(raw_indexes, (list, tuple, set)):
+                        index_names = [str(index_name) for index_name in raw_indexes if str(index_name)]
+
+                entries.append(
+                    {
+                        "name": name,
+                        "label": info["label"],
+                        "active": name == self._active_graph_name,
+                        "searchable": callable(getattr(container, "search", None)),
+                        "indexes": index_names,
+                        "has_node_vector_index": "node_vector" in set(index_names),
+                    }
+                )
+            return entries
 
     def switch_graph(self, name: str) -> None:
         """Switch the active graph and rebuild topology indexes + reset chat service."""

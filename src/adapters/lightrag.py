@@ -13,7 +13,7 @@ from ..core import SearchableGraphContainer, SimpleGraphContainer
 from ..types import EdgeRecord, NodeRecord
 from ..utils import container_or_new
 from .base import GraphAdapter, GraphAdapterError, UnsupportedSourceError
-from .indexers import ChromaCollectionIndexer, to_float_list
+from ..indexers import ChromaCollectionIndexer, to_float_list
 
 dotenv.load_dotenv()  # Load environment variables from .env file, if present
 

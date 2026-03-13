@@ -1,10 +1,10 @@
-# src/GraphContainer/adapters/indexers.py
+# src/GraphContainer/indexers.py
 from __future__ import annotations
 
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..index import BaseIndexer
+from .index import BaseIndexer
 
 
 def to_float_list(value: Any) -> Optional[List[float]]:

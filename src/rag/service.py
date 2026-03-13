@@ -8,7 +8,7 @@ from .contracts import ChatRequest
 from .embeddings import EmbeddingService
 from .generator import OpenAIChatGenerator
 from .pipeline import GraphRAGPipeline
-from .retrievers import HybridRetriever, OneHopRetriever, VectorRetriever
+from .retrievers import FastInsightRetriever, HybridRetriever, OneHopRetriever, VectorRetriever
 
 
 class GraphRAGService:
@@ -48,12 +48,14 @@ class GraphRAGService:
                     "one-hop": OneHopRetriever(),
                     "vector": VectorRetriever(),
                     "hybrid": HybridRetriever(),
+                    "fastinsight": FastInsightRetriever(),
                 },
                 default_retrieval="one-hop",
                 retrieval_aliases={
                     "graph-hop": "one-hop",
                     "graph-2-hop": "one-hop",
                     "graph": "one-hop",
+                    "fi": "fastinsight",
                 },
             )
         self.pipeline = pipeline
@@ -139,6 +141,9 @@ class GraphRAGService:
                     "embedding_model": request.embedding_model,
                     "embedding_error_policy": request.embedding_error_policy,
                     "llm_answer": response.answer,
+                    "retrieval_elapsed_ms": response.metadata.get("retrieval_elapsed_ms"),
+                    "generation_elapsed_ms": response.metadata.get("generation_elapsed_ms"),
+                    "total_elapsed_ms": response.metadata.get("total_elapsed_ms"),
                 },
                 progress={"current": 100, "total": 100, "message": "Answer generated"},
             )

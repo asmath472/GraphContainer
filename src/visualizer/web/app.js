@@ -32,6 +32,8 @@
   const chatModelSelect = document.getElementById("chat-model-select");
   const chatEmbeddingSelect = document.getElementById("chat-embedding-select");
   const chatRetrievalSelect = document.getElementById("chat-retrieval-select");
+  const chatRetrievalWarning = document.getElementById("chat-retrieval-warning");
+  const chatRetrievalWarningText = document.getElementById("chat-retrieval-warning-text");
   const chatSessionListEl = document.getElementById("chat-session-list");
   const newChatBtn = document.getElementById("new-chat-btn");
   const chatTitleEl = document.getElementById("chat-title");
@@ -39,6 +41,7 @@
   const chatThread = document.getElementById("chat-thread");
   const chatInput = document.getElementById("chat-input");
   const chatSendBtn = document.getElementById("chat-send");
+  const graphCapabilitiesByName = new Map();
 
   const importForm = document.getElementById("import-form");
   const importAdapterSelect = document.getElementById("import-adapter");
@@ -123,6 +126,42 @@
     }
   }
 
+  function normalizeGraphCapability(rawGraph) {
+    if (!rawGraph || typeof rawGraph !== "object") return null;
+    const name = String(rawGraph.name || "").trim();
+    if (!name) return null;
+    const rawIndexes = Array.isArray(rawGraph.indexes) ? rawGraph.indexes : [];
+    const indexes = rawIndexes
+      .map((item) => String(item || "").trim())
+      .filter((item) => item.length > 0);
+    const hasNodeVectorIndex = Boolean(rawGraph.has_node_vector_index) || indexes.includes("node_vector");
+    return { name, indexes, hasNodeVectorIndex };
+  }
+
+  function cacheGraphCapabilities(rawGraphs) {
+    graphCapabilitiesByName.clear();
+    if (!Array.isArray(rawGraphs)) return;
+    for (const rawGraph of rawGraphs) {
+      const capability = normalizeGraphCapability(rawGraph);
+      if (!capability) continue;
+      graphCapabilitiesByName.set(capability.name, capability);
+    }
+  }
+
+  function toElapsedMs(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric < 0) return null;
+    return numeric;
+  }
+
+  function formatElapsed(value) {
+    const elapsedMs = toElapsedMs(value);
+    if (elapsedMs === null) return "";
+    if (elapsedMs < 1000) return `${Math.round(elapsedMs)}ms`;
+    if (elapsedMs < 10000) return `${(elapsedMs / 1000).toFixed(2)}s`;
+    return `${(elapsedMs / 1000).toFixed(1)}s`;
+  }
+
   try {
     const configRes = await fetch("/api/config");
     const config = configRes.ok ? await configRes.json() : { default_hops: 2 };
@@ -130,6 +169,7 @@
 
     // Populate graph dropdown from server registry
     if (chatGraphSelect && Array.isArray(config.graphs) && config.graphs.length) {
+      cacheGraphCapabilities(config.graphs);
       chatGraphSelect.innerHTML = "";
       for (const g of config.graphs) {
         const opt = document.createElement("option");
@@ -151,6 +191,7 @@
       if (!res.ok) return;
       const payload = await res.json();
       const graphs = Array.isArray(payload.graphs) ? payload.graphs : [];
+      cacheGraphCapabilities(graphs);
       if (!graphs.length) return;
       chatGraphSelect.innerHTML = "";
       for (const g of graphs) {
@@ -160,6 +201,7 @@
         if (g.active || (activeName && g.name === activeName)) opt.selected = true;
         chatGraphSelect.appendChild(opt);
       }
+      updateFastInsightWarning(getActiveChatSession());
     } catch (_) { }
   }
 
@@ -1087,6 +1129,36 @@
     return String(lastMessage.text).replace(/\s+/g, " ").trim().slice(0, 42);
   }
 
+  function updateFastInsightWarning(session = null) {
+    if (!chatRetrievalWarning || !chatRetrievalWarningText) return;
+    const targetSession = session || getActiveChatSession();
+    const retrieval = String(
+      (targetSession && targetSession.retrieval) ||
+      (chatRetrievalSelect && chatRetrievalSelect.value) ||
+      ""
+    )
+      .trim()
+      .toLowerCase();
+    const graphName = String(
+      (targetSession && targetSession.graph) ||
+      (chatGraphSelect && chatGraphSelect.value) ||
+      ""
+    ).trim();
+    const capability = graphCapabilitiesByName.get(graphName) || null;
+    const shouldWarn = retrieval === "fastinsight" && (!capability || !capability.hasNodeVectorIndex);
+
+    if (!shouldWarn) {
+      chatRetrievalWarning.classList.add("hidden");
+      chatRetrievalWarning.setAttribute("aria-hidden", "true");
+      return;
+    }
+
+    chatRetrievalWarningText.textContent =
+      "FastInsight requires a dense vector index (`node_vector`). This graph does not provide one. Choose One-Hop/Vector, or switch to a graph with a dense index.";
+    chatRetrievalWarning.classList.remove("hidden");
+    chatRetrievalWarning.setAttribute("aria-hidden", "false");
+  }
+
   function syncChatControls(session) {
     if (!session) return;
     // Only set graph value if the option actually exists in the dropdown
@@ -1097,6 +1169,7 @@
     if (chatModelSelect) chatModelSelect.value = session.model;
     if (chatEmbeddingSelect) chatEmbeddingSelect.value = session.embedding;
     if (chatRetrievalSelect) chatRetrievalSelect.value = session.retrieval;
+    updateFastInsightWarning(session);
   }
 
   function renderChatHeader(session) {
@@ -1104,10 +1177,12 @@
     if (!session) {
       chatTitleEl.textContent = "Graph Chat";
       chatSubtitleEl.textContent = "No active chat";
+      updateFastInsightWarning(null);
       return;
     }
     chatTitleEl.textContent = session.title;
     chatSubtitleEl.textContent = buildChatSubtitle(session);
+    updateFastInsightWarning(session);
   }
 
   function ensureElement(parent, selector, tagName, className) {
@@ -1151,6 +1226,27 @@
     const bodyEl = ensureElement(msgEl, `.msg-body#msg-body-${messageId}`, "div", "msg-body");
     bodyEl.id = `msg-body-${messageId}`;
     bodyEl.textContent = String(message.text || "");
+
+    let elapsedEl = msgEl.querySelector(".msg-elapsed");
+    const elapsed = message && message.elapsed && typeof message.elapsed === "object" ? message.elapsed : null;
+    if (
+      elapsed &&
+      (String(elapsed.retrieval || "").trim() || String(elapsed.generation || "").trim())
+    ) {
+      if (!elapsedEl) {
+        elapsedEl = document.createElement("div");
+        elapsedEl.className = "msg-elapsed";
+        msgEl.appendChild(elapsedEl);
+      }
+      const retrievalValue = String(elapsed.retrieval || "").trim() || "n/a";
+      const generationValue = String(elapsed.generation || "").trim() || "n/a";
+      elapsedEl.innerHTML = [
+        `<span class="elapsed-chip"><span class="elapsed-label">retrieval</span><span class="elapsed-value">${retrievalValue}</span></span>`,
+        `<span class="elapsed-chip"><span class="elapsed-label">generation</span><span class="elapsed-value">${generationValue}</span></span>`,
+      ].join("");
+    } else if (elapsedEl) {
+      elapsedEl.remove();
+    }
 
     const hasMiniGraph = message.role === "assistant" && Boolean(message.visualSessionId);
     let miniWrap = msgEl.querySelector(".msg-mini-session-wrap");
@@ -1300,6 +1396,7 @@
     renderChatHeader(session);
     renderChatSessionList();
     renderChatThread();
+    updateFastInsightWarning(session);
   }
 
   function removeChatSession(chatId) {
@@ -1324,6 +1421,7 @@
     session.updatedAt = Date.now();
     renderChatHeader(session);
     renderChatSessionList();
+    updateFastInsightWarning(session);
   }
 
   function maybeRenameNewChat(session, userText) {
@@ -1385,6 +1483,9 @@
     let answerAssistant = null;
     let generatingSpinnerTimer = null;
     let hasGeneratingStarted = false;
+    const retrievalStartedAt = performance.now();
+    let retrievalFinishedAt = null;
+    let generationStartedAt = null;
 
     function ensureAnswerAssistant() {
       if (answerAssistant) return answerAssistant;
@@ -1421,11 +1522,17 @@
         clearInterval(retrievalSpinnerTimer);
         retrievalSpinnerTimer = null;
       }
+      if (retrievalFinishedAt === null) {
+        retrievalFinishedAt = performance.now();
+      }
       retrievalAssistant.text = "Retrieval complete.";
       updateMessageBodyText(retrievalAssistant.id, retrievalAssistant.text);
 
       ensureAnswerAssistant();
       renderChatThread();
+      if (generationStartedAt === null) {
+        generationStartedAt = performance.now();
+      }
 
       let generatingSpinnerIndex = 0;
       generatingSpinnerTimer = setInterval(() => {
@@ -1527,6 +1634,25 @@
       }
       ensureAnswerAssistant();
       answerAssistant.text = String(data.answer || "I could not generate a response.");
+      const responseMeta = data && typeof data.metadata === "object" ? data.metadata : {};
+      const retrievalElapsedMs =
+        toElapsedMs(responseMeta.retrieval_elapsed_ms) ??
+        (retrievalFinishedAt !== null ? retrievalFinishedAt - retrievalStartedAt : null);
+      const generationElapsedMs =
+        toElapsedMs(responseMeta.generation_elapsed_ms) ??
+        (generationStartedAt !== null ? performance.now() - generationStartedAt : null);
+      const retrievalElapsedText = formatElapsed(retrievalElapsedMs);
+      const generationElapsedText = formatElapsed(generationElapsedMs);
+      if (retrievalElapsedText || generationElapsedText) {
+        const retrievalPart = retrievalElapsedText || "n/a";
+        const generationPart = generationElapsedText || "n/a";
+        retrievalAssistant.elapsed = {
+          retrieval: retrievalPart,
+          generation: generationPart,
+        };
+        retrievalAssistant.text = "Retrieval complete.";
+        updateMessageBodyText(retrievalAssistant.id, retrievalAssistant.text);
+      }
       if (data.session_id) {
         session.vizSessionId = String(data.session_id);
         retrievalAssistant.visualSessionId = session.vizSessionId;

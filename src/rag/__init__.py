@@ -2,7 +2,7 @@ from .contracts import ChatMessage, ChatRequest, ChatResponse, RetrievedNode, Re
 from .embeddings import BGEEmbedder, EmbeddingService, HuggingFaceEmbedder, OpenAIEmbedder
 from .generator import OpenAIChatGenerator
 from .pipeline import GraphRAGPipeline
-from .retrievers import BaseRetriever, HybridRetriever, OneHopRetriever, VectorRetriever
+from .retrievers import BaseRetriever, FastInsightRetriever, HybridRetriever, OneHopRetriever, VectorRetriever
 from .service import GraphRAGService
 
 __all__ = [
@@ -21,5 +21,6 @@ __all__ = [
     "OneHopRetriever",
     "VectorRetriever",
     "HybridRetriever",
+    "FastInsightRetriever",
     "GraphRAGService",
 ]
