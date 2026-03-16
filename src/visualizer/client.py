@@ -17,6 +17,37 @@ def _normalize_base_url(base_url: str) -> str:
     return base_url.rstrip("/")
 
 
+def _build_record_nodes(
+    node_ids: Optional[Any],
+    *,
+    style: Optional[Dict[str, Any]] = None,
+) -> Optional[List[Any]]:
+    if node_ids is None:
+        return None
+    if isinstance(node_ids, (str, dict)):
+        items = [node_ids]
+    else:
+        items = list(node_ids)
+
+    nodes: List[Any] = []
+    for item in items:
+        if isinstance(item, str):
+            if style:
+                nodes.append({"id": item, "style": dict(style)})
+            else:
+                nodes.append(item)
+            continue
+        if not isinstance(item, dict):
+            raise TypeError("node_ids must contain str or dict items.")
+        payload = dict(item)
+        if style:
+            merged_style = dict(style)
+            merged_style.update(dict(payload.get("style", {})))
+            payload["style"] = merged_style
+        nodes.append(payload)
+    return nodes
+
+
 def _request_json(
     base_url: str,
     path: str,
@@ -136,6 +167,29 @@ def update_session(
     )
 
 
+def record(
+    base_url: str,
+    session_id: str,
+    node_ids: Optional[Any],
+    *,
+    style: Optional[Dict[str, Any]] = None,
+    edges: Optional[Sequence[Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    message: str = "",
+    timeout: float = 5.0,
+) -> Dict[str, Any]:
+    progress = {"message": message} if message else None
+    return update_session(
+        base_url,
+        session_id,
+        nodes=_build_record_nodes(node_ids, style=style),
+        edges=edges,
+        metadata=metadata,
+        progress=progress,
+        timeout=timeout,
+    )
+
+
 def set_progress(
     base_url: str,
     session_id: str,
@@ -214,6 +268,27 @@ class LiveVisualizerClient:
             edges=edges,
             metadata=metadata,
             progress=progress,
+            timeout=self.timeout,
+        )
+
+    def record(
+        self,
+        session_id: str,
+        node_ids: Optional[Any],
+        *,
+        style: Optional[Dict[str, Any]] = None,
+        edges: Optional[Sequence[Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        message: str = "",
+    ) -> Dict[str, Any]:
+        return record(
+            self.base_url,
+            session_id,
+            node_ids,
+            style=style,
+            edges=edges,
+            metadata=metadata,
+            message=message,
             timeout=self.timeout,
         )
 

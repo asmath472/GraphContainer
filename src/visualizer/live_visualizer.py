@@ -35,6 +35,17 @@ def _default_edge_style() -> Dict[str, Any]:
     return {"width": 3}
 
 
+def _record_default_node_style() -> Dict[str, Any]:
+    return {
+        "color": {"background": "#ef5350", "border": "#b71c1c"},
+        "borderWidth": 3,
+    }
+
+
+def _default_progress() -> Dict[str, Any]:
+    return {"step": 0, "current": 0, "total": 0, "percent": 0.0, "message": ""}
+
+
 @dataclass
 class _SessionState:
     created_at: float = field(default_factory=time.time)
@@ -43,9 +54,7 @@ class _SessionState:
     metadata: Dict[str, Any] = field(default_factory=dict)
     nodes: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     edges: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    progress: Dict[str, Any] = field(
-        default_factory=lambda: {"current": 0, "total": 0, "percent": 0.0, "message": ""}
-    )
+    progress: Dict[str, Any] = field(default_factory=_default_progress)
     replay_snapshots: List[Dict[str, Any]] = field(default_factory=list)
 
 
@@ -195,6 +204,23 @@ class LiveGraphVisualizer:
     @staticmethod
     def _json_clone(payload: Dict[str, Any]) -> Dict[str, Any]:
         return json.loads(json.dumps(payload, ensure_ascii=False))
+
+    @staticmethod
+    def _next_progress_state(
+        current_progress: Dict[str, Any],
+        progress: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        step = int(current_progress.get("step", 0) or 0) + 1
+        message = str(current_progress.get("message", "") or "")
+        if isinstance(progress, dict) and "message" in progress:
+            message = str(progress.get("message", "") or "")
+        return {
+            "step": step,
+            "current": step,
+            "total": step,
+            "percent": 0.0,
+            "message": message,
+        }
 
     def _build_subgraph_view_locked(
         self,
@@ -358,6 +384,7 @@ class LiveGraphVisualizer:
                 state = self._sessions[session_id]
                 state.nodes.clear()
                 state.edges.clear()
+                state.progress = _default_progress()
                 state.replay_snapshots.clear()
                 self._bump_revision_locked(state)
                 self._notify_session_event_locked()
@@ -402,25 +429,11 @@ class LiveGraphVisualizer:
             state = self._sessions.get(session_id)
             if state is None:
                 raise KeyError(f"Unknown session: {session_id}")
-            prev_percent = float(state.progress.get("percent", 0.0))
 
             if metadata:
                 state.metadata.update(metadata)
 
-            if progress:
-                current = int(progress.get("current", state.progress.get("current", 0)) or 0)
-                total = int(progress.get("total", state.progress.get("total", 0)) or 0)
-                message = str(progress.get("message", state.progress.get("message", "")) or "")
-                if total > 0:
-                    percent = max(0.0, min(100.0, (current / total) * 100.0))
-                else:
-                    percent = float(state.progress.get("percent", 0.0))
-                state.progress = {
-                    "current": current,
-                    "total": total,
-                    "percent": percent,
-                    "message": message,
-                }
+            state.progress = self._next_progress_state(state.progress, progress)
 
             for node in nodes or []:
                 if isinstance(node, str):
@@ -465,12 +478,49 @@ class LiveGraphVisualizer:
                 }
 
             self._bump_revision_locked(state)
-            if progress is not None:
-                next_percent = float(state.progress.get("percent", prev_percent))
-                percent_changed = abs(next_percent - prev_percent) > 1e-9
-                if percent_changed or not state.replay_snapshots:
-                    self._capture_replay_snapshot_locked(session_id, state)
+            self._capture_replay_snapshot_locked(session_id, state)
             self._notify_session_event_locked()
+
+    def record(
+        self,
+        session_id: str,
+        node_ids: Optional[Union[str, Dict[str, Any], Sequence[Union[str, Dict[str, Any]]]]] = None,
+        *,
+        style: Optional[Dict[str, Any]] = None,
+        edges: Optional[Sequence[Union[Tuple[str, str], Tuple[str, str, str], List[Any], Dict[str, Any]]]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        message: str = "",
+    ) -> None:
+        raw_items: List[Union[str, Dict[str, Any]]]
+        if node_ids is None:
+            raw_items = []
+        elif isinstance(node_ids, (str, dict)):
+            raw_items = [node_ids]
+        else:
+            raw_items = list(node_ids)
+
+        effective_style = dict(style) if style else _record_default_node_style()
+        nodes: List[Union[str, Dict[str, Any]]] = []
+        for item in raw_items:
+            if isinstance(item, str):
+                nodes.append({"id": item, "style": dict(effective_style)})
+                continue
+            if not isinstance(item, dict):
+                raise TypeError("node_ids must contain str or dict items.")
+            payload = dict(item)
+            merged_style = dict(effective_style)
+            merged_style.update(dict(payload.get("style", {})))
+            payload["style"] = merged_style
+            nodes.append(payload)
+
+        progress = {"message": message} if message else None
+        self.update_session(
+            session_id,
+            nodes=nodes or None,
+            edges=edges,
+            metadata=metadata,
+            progress=progress,
+        )
 
     def set_progress(self, session_id: str, current: int, total: int, message: str = "") -> None:
         self.update_session(
@@ -516,7 +566,7 @@ class LiveGraphVisualizer:
                     "nodes": [],
                     "edges": [],
                     "metadata": {},
-                    "progress": {"current": 0, "total": 0, "percent": 0.0, "message": ""},
+                    "progress": _default_progress(),
                     "updated_at": None,
                 }
             return {

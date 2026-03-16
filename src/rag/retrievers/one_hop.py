@@ -30,7 +30,7 @@ class OneHopRetriever(BaseRetriever):
         if visualizer is not None and session_id:
             visualizer.update_session(
                 session_id,
-                progress={"current": 10, "total": 100, "message": "Running one-hop retrieval"},
+                progress={"message": "Running one-hop retrieval"},
             )
 
         seed_ids: List[str] = []
@@ -76,23 +76,14 @@ class OneHopRetriever(BaseRetriever):
             )
 
         if visualizer is not None and session_id:
-            visualizer.update_session(
+            visualizer.record(
                 session_id,
-                nodes=[
-                    {
-                        "id": sid,
-                        "style": {
-                            "color": {"background": "#ffeb3b", "border": "#f44336"},
-                            "borderWidth": 5,
-                        },
-                    }
-                    for sid in seed_ids
-                ],
-                progress={
-                    "current": 35,
-                    "total": 100,
-                    "message": f"Seed nodes found: {len(seed_ids)}",
+                seed_ids,
+                style={
+                    "color": {"background": "#ffeb3b", "border": "#f44336"},
+                    "borderWidth": 5,
                 },
+                message=f"Seed nodes found: {len(seed_ids)}",
             )
 
         one_hop_ids: List[str] = []
@@ -138,17 +129,13 @@ class OneHopRetriever(BaseRetriever):
             for node_id in one_hop_ids:
                 if node_id in seed_ids:
                     continue
-                visualizer.update_session(
+                visualizer.record(
                     session_id,
-                    nodes=[
-                        {
-                            "id": node_id,
-                            "style": {
-                                "color": {"background": "#c8e6c9", "border": "#4caf50"},
-                                "borderWidth": 3,
-                            },
-                        }
-                    ],
+                    node_id,
+                    style={
+                        "color": {"background": "#c8e6c9", "border": "#4caf50"},
+                        "borderWidth": 3,
+                    },
                 )
                 time.sleep(0.1)  
             visualizer.update_session(
@@ -161,11 +148,12 @@ class OneHopRetriever(BaseRetriever):
                         "style": {"width": 3},
                     } for edge in one_hop_edges
                 ],
+                progress={"message": "Recording one-hop edges"},
             )
 
             visualizer.update_session(
                 session_id,
-                progress={"current": 100, "total": 100, "message": "Retrieval complete"},
+                progress={"message": "Retrieval complete"},
             )
 
         return RetrievalResult(

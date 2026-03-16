@@ -121,7 +121,7 @@ class GraphRAGService:
                     "embedding_model": request.embedding_model,
                     "embedding_error_policy": request.embedding_error_policy,
                 },
-                progress={"current": 0, "total": 100, "message": "Starting graph retrieval"},
+                progress={"message": "Starting graph retrieval"},
             )
 
         request = replace(request, session_id=session_id)
@@ -145,6 +145,6 @@ class GraphRAGService:
                     "generation_elapsed_ms": response.metadata.get("generation_elapsed_ms"),
                     "total_elapsed_ms": response.metadata.get("total_elapsed_ms"),
                 },
-                progress={"current": 100, "total": 100, "message": "Answer generated"},
+                progress={"message": "Answer generated"},
             )
         return response.to_dict()

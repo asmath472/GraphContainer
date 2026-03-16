@@ -457,14 +457,19 @@
     return raw.replace(/^session\s*:\s*/i, "").trim();
   }
 
+  function getProgressStep(progress) {
+    const rawStep = Number((progress && (progress.step || progress.current)) || 0);
+    if (!Number.isFinite(rawStep)) return 0;
+    return Math.max(0, Math.trunc(rawStep));
+  }
+
   function updateProgressBar(progress) {
     const p = progress || {};
-    let percent = Number(p.percent || 0);
-    percent = Math.max(0, Math.min(100, percent));
-    progressFill.style.width = `${percent}%`;
-    progressText.innerHTML = `<span style="color:var(--accent-color); font-weight:bold;">${percent.toFixed(
-      1
-    )}%</span> - ${p.message || "Processing"}`;
+    const step = getProgressStep(p);
+    progressFill.style.width = step > 0 ? "100%" : "0%";
+    progressText.innerHTML = `<span style="color:var(--accent-color); font-weight:bold;">Step ${
+      step || 0
+    }</span> - ${p.message || "Processing"}`;
   }
 
   function cloneReplayView(view) {
@@ -533,7 +538,7 @@
     const effectiveIndex = cursor === null ? maxIndex : cursor;
     const entry = history[effectiveIndex];
     const progress = entry && entry.view && entry.view.progress ? entry.view.progress : {};
-    const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+    const step = getProgressStep(progress);
     const message = String(progress.message || "Processing");
     const mode = cursor === null ? "Live" : "Replay";
 
@@ -544,7 +549,7 @@
     if (replayLiveBtn) replayLiveBtn.disabled = cursor === null;
 
     setReplayStatusText(
-      `${mode} ${effectiveIndex + 1}/${history.length} · ${percent.toFixed(1)}% · ${message}`
+      `${mode} ${effectiveIndex + 1}/${history.length} · Step ${step} · ${message}`
     );
   }
 
@@ -554,12 +559,14 @@
     const snapshot = cloneReplayView(view);
     const last = history.length ? history[history.length - 1] : null;
     const currentProgress = snapshot.progress || {};
-    const currentPercent = Number(currentProgress.percent || 0);
+    const currentStep = getProgressStep(currentProgress);
+    const currentSignature = buildMiniSnapshotSignature(snapshot);
 
     if (last) {
       const lastProgress = (last.view && last.view.progress) || {};
-      const lastPercent = Number(lastProgress.percent || 0);
-      if (Math.abs(currentPercent - lastPercent) < 0.0001) {
+      const lastStep = getProgressStep(lastProgress);
+      const lastSignature = buildMiniSnapshotSignature(last.view || {});
+      if (currentStep === lastStep && currentSignature === lastSignature) {
         return;
       }
     }
