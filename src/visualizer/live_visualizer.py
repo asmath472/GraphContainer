@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import mimetypes
+import cgi
 import os
 import shutil
 import threading
@@ -35,17 +37,6 @@ def _default_edge_style() -> Dict[str, Any]:
     return {"width": 3}
 
 
-def _record_default_node_style() -> Dict[str, Any]:
-    return {
-        "color": {"background": "#ef5350", "border": "#b71c1c"},
-        "borderWidth": 3,
-    }
-
-
-def _default_progress() -> Dict[str, Any]:
-    return {"step": 0, "current": 0, "total": 0, "percent": 0.0, "message": ""}
-
-
 @dataclass
 class _SessionState:
     created_at: float = field(default_factory=time.time)
@@ -54,7 +45,9 @@ class _SessionState:
     metadata: Dict[str, Any] = field(default_factory=dict)
     nodes: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     edges: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    progress: Dict[str, Any] = field(default_factory=_default_progress)
+    progress: Dict[str, Any] = field(
+        default_factory=lambda: {"current": 0, "total": 0, "percent": 0.0, "message": ""}
+    )
     replay_snapshots: List[Dict[str, Any]] = field(default_factory=list)
 
 
@@ -108,12 +101,14 @@ class LiveGraphVisualizer:
         container: "SimpleGraphContainer",
         *,
         label: str = "",
+        graph_type: str = "",
     ) -> None:
         """Register a named graph. The first registered graph becomes active."""
         with self._lock:
             self._graphs[name] = {
                 "label": label or name,
                 "container": container,
+                "graph_type": graph_type or "",
             }
             if not self._active_graph_name:
                 self._active_graph_name = name
@@ -129,33 +124,28 @@ class LiveGraphVisualizer:
             raise RuntimeError("No graph has been registered. Call register_graph() first.")
         return self._graphs[self._active_graph_name]["container"]
 
-    def list_graphs(self) -> List[Dict[str, Any]]:
-        """Return graph registry entries with active flag and index capabilities."""
+    def list_graphs(self) -> List[Dict[str, str]]:
+        """Return [{name, label, active}] for all registered graphs."""
         with self._lock:
-            entries: List[Dict[str, Any]] = []
-            for name, info in self._graphs.items():
-                container = info.get("container")
-                index_names: List[str] = []
-                list_indexes = getattr(container, "list_indexes", None)
-                if callable(list_indexes):
-                    try:
-                        raw_indexes = list_indexes()
-                    except Exception:
-                        raw_indexes = []
-                    if isinstance(raw_indexes, (list, tuple, set)):
-                        index_names = [str(index_name) for index_name in raw_indexes if str(index_name)]
-
-                entries.append(
-                    {
-                        "name": name,
-                        "label": info["label"],
-                        "active": name == self._active_graph_name,
-                        "searchable": callable(getattr(container, "search", None)),
-                        "indexes": index_names,
-                        "has_node_vector_index": "node_vector" in set(index_names),
-                    }
-                )
-            return entries
+            return [
+                {
+                    "name": name,
+                    "label": info["label"],
+                    "active": name == self._active_graph_name,
+                    "graph_type": info.get("graph_type", ""),
+                    "indexes": (
+                        info["container"].list_indexes()
+                        if hasattr(info["container"], "list_indexes")
+                        else []
+                    ),
+                    "has_node_vector_index": (
+                        "node_vector" in info["container"].list_indexes()
+                        if hasattr(info["container"], "list_indexes")
+                        else False
+                    ),
+                }
+                for name, info in self._graphs.items()
+            ]
 
     def switch_graph(self, name: str) -> None:
         """Switch the active graph and rebuild topology indexes + reset chat service."""
@@ -204,23 +194,6 @@ class LiveGraphVisualizer:
     @staticmethod
     def _json_clone(payload: Dict[str, Any]) -> Dict[str, Any]:
         return json.loads(json.dumps(payload, ensure_ascii=False))
-
-    @staticmethod
-    def _next_progress_state(
-        current_progress: Dict[str, Any],
-        progress: Optional[Dict[str, Any]],
-    ) -> Dict[str, Any]:
-        step = int(current_progress.get("step", 0) or 0) + 1
-        message = str(current_progress.get("message", "") or "")
-        if isinstance(progress, dict) and "message" in progress:
-            message = str(progress.get("message", "") or "")
-        return {
-            "step": step,
-            "current": step,
-            "total": step,
-            "percent": 0.0,
-            "message": message,
-        }
 
     def _build_subgraph_view_locked(
         self,
@@ -384,7 +357,6 @@ class LiveGraphVisualizer:
                 state = self._sessions[session_id]
                 state.nodes.clear()
                 state.edges.clear()
-                state.progress = _default_progress()
                 state.replay_snapshots.clear()
                 self._bump_revision_locked(state)
                 self._notify_session_event_locked()
@@ -429,11 +401,25 @@ class LiveGraphVisualizer:
             state = self._sessions.get(session_id)
             if state is None:
                 raise KeyError(f"Unknown session: {session_id}")
+            prev_percent = float(state.progress.get("percent", 0.0))
 
             if metadata:
                 state.metadata.update(metadata)
 
-            state.progress = self._next_progress_state(state.progress, progress)
+            if progress:
+                current = int(progress.get("current", state.progress.get("current", 0)) or 0)
+                total = int(progress.get("total", state.progress.get("total", 0)) or 0)
+                message = str(progress.get("message", state.progress.get("message", "")) or "")
+                if total > 0:
+                    percent = max(0.0, min(100.0, (current / total) * 100.0))
+                else:
+                    percent = float(state.progress.get("percent", 0.0))
+                state.progress = {
+                    "current": current,
+                    "total": total,
+                    "percent": percent,
+                    "message": message,
+                }
 
             for node in nodes or []:
                 if isinstance(node, str):
@@ -478,45 +464,39 @@ class LiveGraphVisualizer:
                 }
 
             self._bump_revision_locked(state)
-            self._capture_replay_snapshot_locked(session_id, state)
+            if nodes is not None or edges is not None or progress is not None:
+                next_percent = float(state.progress.get("percent", prev_percent))
+                percent_changed = abs(next_percent - prev_percent) > 1e-9
+                if percent_changed or nodes is not None or edges is not None or not state.replay_snapshots:
+                    self._capture_replay_snapshot_locked(session_id, state)
             self._notify_session_event_locked()
 
     def record(
         self,
         session_id: str,
-        node_ids: Optional[Union[str, Dict[str, Any], Sequence[Union[str, Dict[str, Any]]]]] = None,
+        node_ids: Optional[Any],
         *,
         style: Optional[Dict[str, Any]] = None,
-        edges: Optional[Sequence[Union[Tuple[str, str], Tuple[str, str, str], List[Any], Dict[str, Any]]]] = None,
+        edges: Optional[Sequence[Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         message: str = "",
     ) -> None:
-        raw_items: List[Union[str, Dict[str, Any]]]
         if node_ids is None:
-            raw_items = []
-        elif isinstance(node_ids, (str, dict)):
-            raw_items = [node_ids]
+            nodes = None
         else:
-            raw_items = list(node_ids)
-
-        effective_style = dict(style) if style else _record_default_node_style()
-        nodes: List[Union[str, Dict[str, Any]]] = []
-        for item in raw_items:
-            if isinstance(item, str):
-                nodes.append({"id": item, "style": dict(effective_style)})
-                continue
-            if not isinstance(item, dict):
-                raise TypeError("node_ids must contain str or dict items.")
-            payload = dict(item)
-            merged_style = dict(effective_style)
-            merged_style.update(dict(payload.get("style", {})))
-            payload["style"] = merged_style
-            nodes.append(payload)
+            if isinstance(node_ids, (list, tuple, set)):
+                ids = list(node_ids)
+            else:
+                ids = [node_ids]
+            node_style = dict(_default_node_style())
+            if style:
+                node_style.update(style)
+            nodes = [{"id": str(node_id), "style": node_style} for node_id in ids]
 
         progress = {"message": message} if message else None
         self.update_session(
             session_id,
-            nodes=nodes or None,
+            nodes=nodes,
             edges=edges,
             metadata=metadata,
             progress=progress,
@@ -566,7 +546,7 @@ class LiveGraphVisualizer:
                     "nodes": [],
                     "edges": [],
                     "metadata": {},
-                    "progress": _default_progress(),
+                    "progress": {"current": 0, "total": 0, "percent": 0.0, "message": ""},
                     "updated_at": None,
                 }
             return {
@@ -703,60 +683,42 @@ class LiveGraphVisualizer:
                 content_type = self.headers.get("Content-Type", "")
                 if "multipart/form-data" not in content_type:
                     raise ValueError("Expected multipart/form-data")
-                boundary_token = "boundary="
-                if boundary_token not in content_type:
-                    raise ValueError("Missing multipart boundary")
-                boundary = content_type.split(boundary_token, 1)[1].strip()
-                if boundary.startswith('"') and boundary.endswith('"'):
-                    boundary = boundary[1:-1]
-                if not boundary:
-                    raise ValueError("Invalid multipart boundary")
-
                 length_raw = self.headers.get("Content-Length", "0")
                 try:
-                    length = int(length_raw)
+                    int(length_raw)
                 except ValueError:
                     raise ValueError("Invalid Content-Length")
-                raw = self.rfile.read(length)
-                if not raw:
-                    return {}, []
 
-                delimiter = f"--{boundary}".encode("utf-8")
-                parts = raw.split(delimiter)
+                env = {
+                    "REQUEST_METHOD": "POST",
+                    "CONTENT_TYPE": content_type,
+                    "CONTENT_LENGTH": length_raw,
+                }
+                form = cgi.FieldStorage(
+                    fp=self.rfile,
+                    headers=self.headers,
+                    environ=env,
+                    keep_blank_values=True,
+                )
+                # Keep a reference so uploaded temp files remain open while we stream them to disk.
+                self._multipart_form = form
                 fields: Dict[str, str] = {}
                 files: List[Dict[str, Any]] = []
+                if not form.list:
+                    return fields, files
 
-                for part in parts[1:-1]:
-                    part = part.strip(b"\r\n")
-                    if not part:
-                        continue
-                    if b"\r\n\r\n" not in part:
-                        continue
-                    header_block, data = part.split(b"\r\n\r\n", 1)
-                    data = data.rstrip(b"\r\n")
-                    headers: Dict[str, str] = {}
-                    for line in header_block.split(b"\r\n"):
-                        if b":" not in line:
-                            continue
-                        key, value = line.split(b":", 1)
-                        headers[key.decode("utf-8").strip().lower()] = value.decode("utf-8").strip()
-                    disposition = headers.get("content-disposition", "")
-                    if "form-data" not in disposition:
-                        continue
-                    name = ""
-                    filename = None
-                    for segment in disposition.split(";"):
-                        segment = segment.strip()
-                        if segment.startswith("name="):
-                            name = segment.split("=", 1)[1].strip().strip('"')
-                        elif segment.startswith("filename="):
-                            filename = segment.split("=", 1)[1].strip().strip('"')
-                    if not name:
-                        continue
-                    if filename is not None and filename != "":
-                        files.append({"name": name, "filename": filename, "data": data})
+                for item in form.list:
+                    if item.filename:
+                        files.append(
+                            {
+                                "name": item.name,
+                                "filename": item.filename,
+                                "file": item.file,
+                                "size": getattr(item, "length", None),
+                            }
+                        )
                     else:
-                        fields[name] = data.decode("utf-8", errors="replace")
+                        fields[item.name] = str(item.value)
                 return fields, files
 
             def do_GET(self) -> None:
@@ -789,20 +751,6 @@ class LiveGraphVisualizer:
                     return
 
                 if path == "/api/config":
-                    embedding_catalog: Dict[str, Any] = {
-                        "default_value": "hf:BAAI/bge-m3",
-                        "options": [],
-                    }
-                    try:
-                        service = visualizer._ensure_chat_service()
-                        if hasattr(service, "list_embedding_options"):
-                            payload = service.list_embedding_options()
-                            if isinstance(payload, dict):
-                                embedding_catalog = payload
-                    except Exception:
-                        # Non-fatal: UI can still use static fallback options.
-                        pass
-
                     self._write_json(
                         {
                             "poll_interval_ms": visualizer.poll_interval_ms,
@@ -810,7 +758,6 @@ class LiveGraphVisualizer:
                             "chat_enabled": True,
                             "default_chat_retrieval": "one-hop",
                             "graphs": visualizer.list_graphs(),
-                            "embedding_catalog": embedding_catalog,
                         }
                     )
                     return
@@ -925,6 +872,158 @@ class LiveGraphVisualizer:
             def do_POST(self) -> None:
                 parsed = urlparse(self.path)
                 path = parsed.path
+                if path == "/api/import":
+                    try:
+                        fields, files = self._parse_multipart()
+                    except ValueError as exc:
+                        self._write_json({"error": str(exc)}, status=400)
+                        return
+
+                    adapter_key = (fields.get("adapter") or "").strip()
+                    if not adapter_key:
+                        self._write_json({"error": "adapter is required"}, status=400)
+                        return
+
+                    label_input = (fields.get("label") or "").strip()
+                    dataset_name = (fields.get("dataset_name") or "").strip()
+                    if not dataset_name:
+                        self._write_json({"error": "dataset_name is required"}, status=400)
+                        return
+                    importer_path = _ADAPTER_IMPORTERS.get(adapter_key)
+                    if importer_path is None:
+                        self._write_json(
+                            {"error": f"Unknown adapter key {adapter_key!r}.", "valid": list(_ADAPTER_IMPORTERS)},
+                            status=400,
+                        )
+                        return
+
+                    source_path: Union[str, Path]
+                    temp_dir: Optional[Path] = None
+                    try:
+                        if adapter_key == "freebasekg":
+                            source_path = dataset_name
+                        else:
+                            if not files:
+                                self._write_json(
+                                    {"error": "No files uploaded for import.", "adapter": adapter_key},
+                                    status=400,
+                                )
+                                return
+
+                            temp_dir = Path(mkdtemp(prefix="graph_import_"))
+                            for file_item in files:
+                                filename = str(file_item.get("filename") or "upload.bin")
+                                rel = Path(filename)
+                                safe_parts = [p for p in rel.parts if p not in {"", ".", ".."}]
+                                safe_rel = Path(*safe_parts) if safe_parts else Path(rel.name)
+                                dest = (temp_dir / safe_rel).resolve()
+                                if temp_dir not in dest.parents and dest != temp_dir:
+                                    self._write_json({"error": "Invalid upload path"}, status=400)
+                                    return
+                                dest.parent.mkdir(parents=True, exist_ok=True)
+                                file_handle = file_item.get("file")
+                                if not file_handle or getattr(file_handle, "closed", False):
+                                    self._write_json(
+                                        {"error": f"Upload stream closed for {filename}."}, status=400
+                                    )
+                                    return
+                                try:
+                                    file_handle.seek(0)
+                                except Exception:
+                                    pass
+                                with dest.open("wb") as fh:
+                                    shutil.copyfileobj(file_handle, fh, length=1024 * 1024)
+                                expected_size = file_item.get("size")
+                                if isinstance(expected_size, int) and expected_size > 0:
+                                    actual_size = dest.stat().st_size
+                                    if actual_size != expected_size:
+                                        self._write_json(
+                                            {
+                                                "error": (
+                                                    f"Upload truncated for {filename}. "
+                                                    f"Expected {expected_size} bytes, got {actual_size}."
+                                                )
+                                            },
+                                            status=400,
+                                        )
+                                        return
+
+                            source_path = temp_dir
+                            zip_files = [p for p in temp_dir.glob("**/*.zip") if p.is_file()]
+                            if len(zip_files) == 1 and zip_files[0].parent == temp_dir:
+                                zip_path = zip_files[0]
+                                with zipfile.ZipFile(zip_path, "r") as zf:
+                                    bad = zf.testzip()
+                                    if bad is not None:
+                                        self._write_json(
+                                            {"error": f"Zip file is corrupted (bad entry: {bad})."},
+                                            status=400,
+                                        )
+                                        return
+                                with zipfile.ZipFile(zip_path, "r") as zf:
+                                    zf.extractall(temp_dir)
+                                zip_path.unlink(missing_ok=True)
+
+                            children = [p for p in temp_dir.iterdir() if p.name != ".DS_Store"]
+                            if len(children) == 1 and children[0].is_dir():
+                                source_path = children[0]
+
+                        if adapter_key == "hipporag":
+                            resolved_root, error = _resolve_hipporag_root(source_path)
+                            if error:
+                                self._write_json({"error": error}, status=400)
+                                return
+                            source_path = resolved_root
+
+                        validation_error = _validate_import_requirements(
+                            adapter_key,
+                            source_path,
+                            dataset_name=dataset_name,
+                        )
+                        if validation_error:
+                            self._write_json({"error": validation_error}, status=400)
+                            return
+
+                        label = label_input or _build_graph_label(
+                            adapter_key,
+                            source_path,
+                            dataset_name=dataset_name,
+                        )
+
+                        module_path, fn_name = importer_path.rsplit(".", 1)
+                        mod = importlib.import_module(
+                            module_path, package=__name__.rsplit(".", 1)[0]
+                        )
+                        import_fn = getattr(mod, fn_name)
+                        graph = import_fn(source_path)
+
+                        with visualizer._lock:
+                            name = LiveGraphVisualizer._make_unique_name(visualizer._graphs, label or adapter_key)
+                            visualizer.register_graph(
+                                name, graph, label=label, graph_type=adapter_key
+                            )
+                            visualizer.switch_graph(name)
+
+                        self._write_json(
+                            {
+                                "ok": True,
+                                "name": name,
+                                "label": label,
+                                "active": name,
+                                "graphs": visualizer.list_graphs(),
+                            }
+                        )
+                        return
+                    except Exception as exc:
+                        if hasattr(self, "_multipart_form"):
+                            self._multipart_form = None
+                        if temp_dir is not None and temp_dir.exists():
+                            shutil.rmtree(temp_dir, ignore_errors=True)
+                        self._write_json({"error": str(exc)}, status=400)
+                        return
+                    finally:
+                        if hasattr(self, "_multipart_form"):
+                            self._multipart_form = None
 
                 try:
                     payload = self._read_json_body()
@@ -958,93 +1057,6 @@ class LiveGraphVisualizer:
 
                     self._write_json({"ok": True, **result})
                     return
-
-                if path == "/api/import":
-                    try:
-                        fields, files = self._parse_multipart()
-                    except ValueError as exc:
-                        self._write_json({"error": str(exc)}, status=400)
-                        return
-
-                    adapter_key = (fields.get("adapter") or "").strip()
-                    if not adapter_key:
-                        self._write_json({"error": "adapter is required"}, status=400)
-                        return
-
-                    label = (fields.get("label") or adapter_key).strip()
-                    dataset_name = (fields.get("dataset_name") or "rmanluo/RoG-webqsp").strip()
-
-                    importer_path = _ADAPTER_IMPORTERS.get(adapter_key)
-                    if importer_path is None:
-                        self._write_json(
-                            {"error": f"Unknown adapter key {adapter_key!r}.", "valid": list(_ADAPTER_IMPORTERS)},
-                            status=400,
-                        )
-                        return
-
-                    source_path: Union[str, Path]
-                    temp_dir: Optional[Path] = None
-                    try:
-                        if adapter_key == "freebasekg":
-                            source_path = dataset_name
-                        else:
-                            if not files:
-                                self._write_json(
-                                    {"error": "No files uploaded for import.", "adapter": adapter_key},
-                                    status=400,
-                                )
-                                return
-
-                            temp_dir = Path(mkdtemp(prefix="graph_import_"))
-                            for file_item in files:
-                                filename = str(file_item.get("filename") or "upload.bin")
-                                rel = Path(filename)
-                                safe_parts = [p for p in rel.parts if p not in {"", ".", ".."}]
-                                safe_rel = Path(*safe_parts) if safe_parts else Path(rel.name)
-                                dest = (temp_dir / safe_rel).resolve()
-                                if temp_dir not in dest.parents and dest != temp_dir:
-                                    self._write_json({"error": "Invalid upload path"}, status=400)
-                                    return
-                                dest.parent.mkdir(parents=True, exist_ok=True)
-                                dest.write_bytes(file_item["data"])
-
-                            source_path = temp_dir
-                            zip_files = [p for p in temp_dir.glob("**/*.zip") if p.is_file()]
-                            if len(zip_files) == 1 and zip_files[0].parent == temp_dir:
-                                zip_path = zip_files[0]
-                                with zipfile.ZipFile(zip_path, "r") as zf:
-                                    zf.extractall(temp_dir)
-                                zip_path.unlink(missing_ok=True)
-
-                            children = [p for p in temp_dir.iterdir() if p.name != ".DS_Store"]
-                            if len(children) == 1 and children[0].is_dir():
-                                source_path = children[0]
-
-                        module_path, fn_name = importer_path.rsplit(".", 1)
-                        mod = __import__(module_path, fromlist=[fn_name])
-                        import_fn = getattr(mod, fn_name)
-                        graph = import_fn(source_path)
-
-                        with visualizer._lock:
-                            name = LiveGraphVisualizer._make_unique_name(visualizer._graphs, label or adapter_key)
-                            visualizer.register_graph(name, graph, label=label)
-                            visualizer.switch_graph(name)
-
-                        self._write_json(
-                            {
-                                "ok": True,
-                                "name": name,
-                                "label": label,
-                                "active": name,
-                                "graphs": visualizer.list_graphs(),
-                            }
-                        )
-                        return
-                    except Exception as exc:
-                        if temp_dir is not None and temp_dir.exists():
-                            shutil.rmtree(temp_dir, ignore_errors=True)
-                        self._write_json({"error": str(exc)}, status=400)
-                        return
 
                 if path == "/api/graph/switch":
                     name = payload.get("name")
@@ -1175,6 +1187,7 @@ def serve_graph(
     *,
     name: str = "default",
     label: str = "",
+    graph_type: str = "",
     host: str = "127.0.0.1",
     port: int = 8765,
     poll_interval_ms: int = 600,
@@ -1193,10 +1206,14 @@ def serve_graph(
             poll_interval_ms=poll_interval_ms,
             default_hops=default_hops,
         )
-        visualizer.register_graph(name, container, label=label or name)
+        visualizer.register_graph(
+            name, container, label=label or name, graph_type=graph_type or name
+        )
         visualizer.start()
     else:
-        _visualizer.register_graph(name, container, label=label or name)
+        _visualizer.register_graph(
+            name, container, label=label or name, graph_type=graph_type or name
+        )
         visualizer = _visualizer
     return visualizer
 
@@ -1218,6 +1235,7 @@ def serve_fastinsight(
         graph,
         name=name,
         label=label,
+        graph_type="fastinsight",
         host=host,
         port=port,
         poll_interval_ms=poll_interval_ms,
@@ -1250,6 +1268,7 @@ def serve_lightrag(
             graph,
             name=name,
             label=label,
+            graph_type="lightrag",
             host=host,
             port=port,
             poll_interval_ms=poll_interval_ms,
@@ -1262,6 +1281,7 @@ def serve_lightrag(
         empty,
         name=name,
         label=label,
+        graph_type="lightrag",
         host=host,
         port=port,
         poll_interval_ms=poll_interval_ms,
@@ -1271,7 +1291,7 @@ def serve_lightrag(
     def _load_graph() -> None:
         _set_env()
         graph = import_graph_from_lightrag(source_path)
-        visualizer.register_graph(name, graph, label=label)
+        visualizer.register_graph(name, graph, label=label, graph_type="lightrag")
 
     threading.Thread(target=_load_graph, daemon=True).start()
     return visualizer
@@ -1293,6 +1313,7 @@ def serve_hipporag(
         graph,
         name=name,
         label=label,
+        graph_type="hipporag",
         host=host,
         port=port,
         poll_interval_ms=poll_interval_ms,
@@ -1322,6 +1343,7 @@ def serve_g_retriever(
         graph,
         name=name,
         label=label,
+        graph_type="g_retriever",
         host=host,
         port=port,
         poll_interval_ms=poll_interval_ms,
@@ -1332,7 +1354,7 @@ def serve_expla_graphs(
     source_path: Union[str, Path],
     *,
     name: str = "expla_graphs",
-    label: str = "Expla Graphs",
+    label: str = "ExplaGraphs",
     host: str = "127.0.0.1",
     port: int = 8765,
     poll_interval_ms: int = 600,
@@ -1346,6 +1368,7 @@ def serve_expla_graphs(
         graph,
         name=name,
         label=label,
+        graph_type="expla_graphs",
         host=host,
         port=port,
         poll_interval_ms=poll_interval_ms,
@@ -1356,7 +1379,7 @@ def serve_freebasekg(
     source_path: Union[str, Path],
     *,
     name: str = "freebasekg",
-    label: str = "Freebase KG",
+    label: str = "FreebaseKG",
     host: str = "127.0.0.1",
     port: int = 8765,
     poll_interval_ms: int = 600,
@@ -1370,6 +1393,7 @@ def serve_freebasekg(
         graph,
         name=name,
         label=label,
+        graph_type="freebasekg",
         host=host,
         port=port,
         poll_interval_ms=poll_interval_ms,
@@ -1393,6 +1417,7 @@ def serve_tog(
         graph,
         name=name,
         label=label,
+        graph_type="tog",
         host=host,
         port=port,
         poll_interval_ms=poll_interval_ms,
@@ -1415,10 +1440,155 @@ _ADAPTER_DEFAULT_LABELS: Dict[str, str] = {
     "lightrag": "LightRAG",
     "hipporag": "HippoRAG",
     "g_retriever": "G-Retriever",
-    "expla_graphs": "Expla Graphs",
-    "freebasekg": "Freebase KG",
+    "expla_graphs": "ExplaGraphs",
+    "freebasekg": "FreebaseKG",
     "tog": "Think-on-Graph",
 }
+
+
+def _pretty_dataset_name(raw: str) -> str:
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    # Use last path segment if it looks like a path or HF repo id.
+    if "/" in raw:
+        raw = raw.split("/")[-1]
+    raw = raw.replace("_", " ").replace("-", " ")
+    parts = [p for p in raw.split() if p]
+    pretty: List[str] = []
+    for part in parts:
+        if part.isupper():
+            pretty.append(part)
+        elif any(ch.isdigit() for ch in part):
+            pretty.append(part)
+        else:
+            pretty.append(part[:1].upper() + part[1:])
+    return " ".join(pretty)
+
+
+def _dataset_name_from_source(
+    adapter_key: str,
+    source_path: Union[str, Path, None],
+    *,
+    graph_id: Optional[str] = None,
+    dataset_name: str = "",
+) -> str:
+    if dataset_name.strip():
+        return _pretty_dataset_name(dataset_name)
+    if graph_id and graph_id != "all":
+        return _pretty_dataset_name(str(graph_id))
+    if adapter_key == "freebasekg":
+        return _pretty_dataset_name(str(source_path or ""))
+    if source_path is None:
+        return ""
+    try:
+        path = Path(source_path)
+        if path.name:
+            return _pretty_dataset_name(path.name)
+        if path.parent and path.parent.name:
+            return _pretty_dataset_name(path.parent.name)
+    except Exception:
+        return _pretty_dataset_name(str(source_path))
+    return ""
+
+
+def _build_graph_label(
+    adapter_key: str,
+    source_path: Union[str, Path, None],
+    *,
+    graph_id: Optional[str] = None,
+    dataset_name: str = "",
+) -> str:
+    format_label = _ADAPTER_DEFAULT_LABELS.get(str(adapter_key), str(adapter_key))
+    dataset_label = _dataset_name_from_source(
+        adapter_key,
+        source_path,
+        graph_id=graph_id,
+        dataset_name=dataset_name,
+    )
+    if dataset_label:
+        return f"{dataset_label} ({format_label})"
+    return format_label
+
+
+def _validate_import_requirements(
+    adapter_key: str,
+    source_path: Union[str, Path],
+    *,
+    dataset_name: str = "",
+) -> Optional[str]:
+    if adapter_key == "freebasekg":
+        if not dataset_name.strip():
+            return "Hugging Face dataset name is required for FreebaseKG."
+        return None
+
+    src = Path(source_path)
+    if adapter_key == "fastinsight":
+        if not (src / "nodes.jsonl").exists() or not (src / "edges.jsonl").exists():
+            return "FastInsight requires nodes.jsonl and edges.jsonl."
+        return None
+
+    if adapter_key == "lightrag":
+        if not (src / "vdb_entities.json").exists() or not (src / "vdb_relationships.json").exists():
+            return "LightRAG requires vdb_entities.json and vdb_relationships.json."
+        return None
+
+    if adapter_key == "hipporag":
+        resolved, error = _resolve_hipporag_root(src)
+        if error:
+            return error
+        has_graph = (resolved / "graph.pickle").exists()
+        has_openie = any(p.is_file() for p in resolved.glob("openie_results_ner_*.json"))
+        if not has_graph or not has_openie:
+            return "HippoRAG requires graph.pickle and openie_results_ner_*.json."
+        return None
+
+    if adapter_key == "g_retriever":
+        nodes_dir = src / "nodes"
+        edges_dir = src / "edges"
+        node_files = [p for p in nodes_dir.glob("*.csv") if p.is_file()]
+        edge_files = [p for p in edges_dir.glob("*.csv") if p.is_file()]
+        if not node_files or not edge_files:
+            return "G-Retriever requires nodes/{i}.csv and edges/{i}.csv inside a folder or zip."
+        node_ids = {p.stem for p in node_files}
+        edge_ids = {p.stem for p in edge_files}
+        if not (node_ids & edge_ids):
+            return "G-Retriever requires matching nodes/{i}.csv and edges/{i}.csv pairs."
+        return None
+
+    if adapter_key == "expla_graphs":
+        if src.is_file() and src.suffix.lower() == ".tsv":
+            return None
+        has_tsv = any(p.is_file() and p.suffix.lower() == ".tsv" for p in src.glob("*.tsv"))
+        if not has_tsv:
+            return "ExplaGraphs requires a .tsv file."
+        return None
+
+    return None
+
+
+def _resolve_hipporag_root(source_path: Union[str, Path]) -> Tuple[Path, Optional[str]]:
+    src = Path(source_path)
+    has_graph = (src / "graph.pickle").exists()
+    has_openie = any(p.is_file() for p in src.glob("openie_results_ner_*.json"))
+    if has_graph and has_openie:
+        return src, None
+
+    candidates: List[Path] = []
+    try:
+        for graph_path in src.rglob("graph.pickle"):
+            parent = graph_path.parent
+            if any(p.is_file() for p in parent.glob("openie_results_ner_*.json")):
+                candidates.append(parent)
+    except Exception:
+        return src, None
+
+    if len(candidates) == 1:
+        return candidates[0], None
+    if len(candidates) > 1:
+        preview = ", ".join(str(p) for p in candidates[:3])
+        return src, f"Multiple HippoRAG roots found. Please zip a single root. Examples: {preview}"
+    return src, None
 
 
 def serve_multi(
@@ -1466,7 +1636,7 @@ def serve_multi(
             extra_kwargs: Dict[str, Any] = {}
             if len(spec) == 2:
                 adapter_key, source_path = spec
-                label = _ADAPTER_DEFAULT_LABELS.get(str(adapter_key), str(adapter_key))
+                label = _build_graph_label(str(adapter_key), source_path)
             elif len(spec) == 3:
                 adapter_key, source_path, label = spec
             elif len(spec) == 4:
@@ -1608,19 +1778,23 @@ def _main() -> None:
             elif raw_path.endswith("@all"):
                 path = raw_path[:-4]
                 extra_kwargs["graph_id"] = "all"
-            # Use the format key as the graph name (unique per entry)
-            name = fmt if fmt not in multi_spec else f"{fmt}_{len(multi_spec)}"
+            # Use dataset + format label as the graph name (unique per entry)
+            label = _build_graph_label(fmt, path, graph_id=extra_kwargs.get("graph_id"))
+            name = LiveGraphVisualizer._make_unique_name(multi_spec, label)
             if extra_kwargs:
-                label = _ADAPTER_DEFAULT_LABELS.get(str(fmt), str(fmt))
                 multi_spec[name] = (fmt, path, label, extra_kwargs)
             else:
-                multi_spec[name] = (fmt, path)
+                multi_spec[name] = (fmt, path, label)
 
         # Also include --source/--format if provided alongside --graph
         if args.format and args.source:
             fmt, path = args.format, args.source
-            name = fmt if fmt not in multi_spec else f"{fmt}_{len(multi_spec)}"
-            multi_spec[name] = (fmt, path)
+            label = _build_graph_label(fmt, path, graph_id=args.graph_id)
+            name = LiveGraphVisualizer._make_unique_name(multi_spec, label)
+            if fmt == "g_retriever":
+                multi_spec[name] = (fmt, path, label, {"graph_id": args.graph_id or "all"})
+            else:
+                multi_spec[name] = (fmt, path, label)
 
         visualizer = serve_multi(multi_spec, **common_kwargs)
         active = visualizer._active_graph_name
@@ -1638,7 +1812,9 @@ def _main() -> None:
         if fmt == "g_retriever":
             # default to "all" so multi-CSV datasets just work out of the box
             extra_kwargs["graph_id"] = args.graph_id if args.graph_id is not None else "all"
-        visualizer = serve_fn(args.source, **common_kwargs, **extra_kwargs)
+        label = _build_graph_label(fmt, args.source, graph_id=extra_kwargs.get("graph_id"))
+        name = label
+        visualizer = serve_fn(args.source, name=name, label=label, **common_kwargs, **extra_kwargs)
         print(f"Visualizer URL: {visualizer.url}  (format={fmt})")
 
     print("Press Ctrl+C to stop.")

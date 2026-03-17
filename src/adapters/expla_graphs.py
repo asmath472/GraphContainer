@@ -99,7 +99,9 @@ class ExplaGraphsAdapter(GraphAdapter):
                 if src_id is None:
                     src_id = f"node-{md5(f'{src_key[0]}|{src_key[1]}'.encode()).hexdigest()}"
                     node_key_to_id[src_key] = src_id
-                    metadata: Dict[str, Any] = {}
+                    metadata: Dict[str, Any] = {
+                        "original_label": src_id,
+                    }
                     if keep_source_reference:
                         metadata.setdefault("_source_path", str(src_path))
                         metadata.setdefault("_source_style", "expla_graphs")
@@ -116,7 +118,9 @@ class ExplaGraphsAdapter(GraphAdapter):
                 if dst_id is None:
                     dst_id = f"node-{md5(f'{dst_key[0]}|{dst_key[1]}'.encode()).hexdigest()}"
                     node_key_to_id[dst_key] = dst_id
-                    metadata = {}
+                    metadata = {
+                        "original_label": dst_id,
+                    }
                     if keep_source_reference:
                         metadata.setdefault("_source_path", str(src_path))
                         metadata.setdefault("_source_style", "expla_graphs")

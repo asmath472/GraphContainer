@@ -4,9 +4,13 @@ from __future__ import annotations
 import base64
 import json
 import os
+import time
 import zlib
+from itertools import islice
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+from tqdm import tqdm
+import pdb
 
 import dotenv
 from ..core import SearchableGraphContainer, SimpleGraphContainer
@@ -16,6 +20,24 @@ from .base import GraphAdapter, GraphAdapterError, UnsupportedSourceError
 from ..indexers import ChromaCollectionIndexer, to_float_list
 
 dotenv.load_dotenv()  # Load environment variables from .env file, if present
+
+
+def _log(msg: str) -> None:
+    if _env_bool("LIGHTRAG_LOG", True):
+        print(f"[lightrag] {msg}")
+
+
+def _log_timing(label: str, start_time: float) -> None:
+    elapsed = time.perf_counter() - start_time
+    _log(f"{label} in {elapsed:.2f}s")
+
+
+def _maybe_pdb(label: str) -> None:
+    if _env_bool("LIGHTRAG_PDB", False):
+        _log(f"pdb break: {label}")
+        import pdb
+
+        pdb.set_trace()
 
 
 def _normalize_source(source: Any) -> Path:
@@ -31,60 +53,58 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _decode_vector(encoded_str: str) -> Optional[List[float]]:
+def _decode_vector_batch(encoded_list: List[Optional[str]]) -> List[Optional[List[float]]]:
+    """Batch decode Base64+zlib float16 vectors; returns None for failures."""
     try:
         import numpy as np
     except ImportError:
-        return None
+        return [None] * len(encoded_list)
 
-    try:
-        decoded = base64.b64decode(encoded_str)
-        decompressed = zlib.decompress(decoded)
-        vec_f16 = np.frombuffer(decompressed, dtype=np.float16)
-        return vec_f16.astype(np.float32).tolist()
-    except Exception:
-        return None
-
-
-def _vector_from_item(item: Dict[str, Any], matrix_row: Any = None) -> Optional[List[float]]:
-    for key in ("__vector__", "embedding", "vector"):
-        v = item.get(key)
-        vec = to_float_list(v)
-        if vec is not None:
-            return vec
-
-    if isinstance(item.get("vector"), str):
-        return _decode_vector(item["vector"])
-
-    vec = to_float_list(matrix_row)
-    if vec is not None:
-        return vec
-    return None
+    out: List[Optional[List[float]]] = []
+    for encoded in encoded_list:
+        if not encoded:
+            out.append(None)
+            continue
+        try:
+            decoded = base64.b64decode(encoded)
+            decompressed = zlib.decompress(decoded)
+            vec_f16 = np.frombuffer(decompressed, dtype=np.float16)
+            out.append(vec_f16.astype(np.float32).tolist())
+        except Exception:
+            out.append(None)
+    return out
 
 
-def _iter_vdb_items(path: Path, *, load_embeddings: bool) -> Iterable[Tuple[Dict[str, Any], Any]]:
+def _iter_vdb_batches(
+    path: Path, *, load_embeddings: bool, batch_size: int
+) -> Iterable[Tuple[List[Dict[str, Any]], List[Any]]]:
     try:
         import ijson  # type: ignore
     except Exception:
         ijson = None
 
     if ijson is None:
+        _log(f"using json.load path for {path.name}")
         with path.open("r", encoding="utf-8") as f:
             payload = json.load(f)
         data = payload.get("data", [])
         matrix = payload.get("matrix", []) if load_embeddings else []
-        for i, item in enumerate(data):
-            if not isinstance(item, dict):
-                continue
-            row = matrix[i] if i < len(matrix) else None
-            yield item, row
+        for i in range(0, len(data), batch_size):
+            items = [x for x in data[i : i + batch_size] if isinstance(x, dict)]
+            rows = matrix[i : i + batch_size] if load_embeddings else [None] * len(items)
+            yield items, rows
         return
 
+    _log(f"using ijson streaming path for {path.name}")
     with path.open("rb") as f:
-        for item in ijson.items(f, "data.item"):
-            if isinstance(item, dict):
-                # Streaming path only reads "data"; embedding is taken from item fields.
-                yield item, None
+        it = ijson.items(f, "data.item")
+        while True:
+            batch = list(islice(it, batch_size))
+            if not batch:
+                break
+            items = [x for x in batch if isinstance(x, dict)]
+            rows = [None] * len(items)  # streaming path has no matrix
+            yield items, rows
 
 
 def _flush_upsert(
@@ -131,72 +151,23 @@ class LightRAGAdapter(GraphAdapter):
 
         attach_index = _env_bool("LIGHTRAG_ATTACH_INDEX", True)
         load_embeddings = _env_bool("LIGHTRAG_LOAD_EMBEDDINGS", True)
-        batch_size = int(os.getenv("LIGHTRAG_BATCH_SIZE", "1000"))
+        load_edge_embeddings = _env_bool("LIGHTRAG_LOAD_EDGE_EMBEDDINGS", True)
+        batch_size = int(os.getenv("LIGHTRAG_BATCH_SIZE", "5000"))
+
+        import_start = time.perf_counter()
+        _log(
+            "import start "
+            f"(attach_index={attach_index}, load_embeddings={load_embeddings}, "
+            f"load_edge_embeddings={load_edge_embeddings}, batch_size={batch_size})"
+        )
+        _maybe_pdb("import start")
 
         graph = container_or_new(container)
         graph.nodes = {}
         graph.edges = []
         graph._adj = {}
 
-        # ── Fast-path: when kv_store files are available, use them unconditionally
-        # for visualization (8 MB + 12 MB vs 700 MB+ vdb JSON files).
-        # Set LIGHTRAG_FORCE_VDB=1 to bypass this and load full vdb files with embeddings.
-        force_vdb = _env_bool("LIGHTRAG_FORCE_VDB", False)
-        kv_ent_file = source_path / "kv_store_full_entities.json"
-        kv_rel_file = source_path / "kv_store_full_relations.json"
-        if not force_vdb and kv_ent_file.exists() and kv_rel_file.exists():
-            with kv_ent_file.open("r", encoding="utf-8") as f:
-                kv_entities: Dict[str, Any] = json.load(f)
-            with kv_rel_file.open("r", encoding="utf-8") as f:
-                kv_relations: Dict[str, Any] = json.load(f)
-
-            # Collect unique entity names → one node each
-            seen_nodes: set = set()
-            for doc_entry in kv_entities.values():
-                for entity_name in doc_entry.get("entity_names", []):
-                    if not entity_name or entity_name in seen_nodes:
-                        continue
-                    seen_nodes.add(entity_name)
-                    graph.add_node(
-                        NodeRecord(
-                            id=str(entity_name),
-                            type="Entity",
-                            text=None,
-                            embedding=None,
-                            metadata={},
-                        )
-                    )
-
-            # Collect unique relation pairs → one edge each
-            seen_edges: set = set()
-            for doc_entry in kv_relations.values():
-                for pair in doc_entry.get("relation_pairs", []):
-                    if len(pair) != 2:
-                        continue
-                    src, tgt = str(pair[0]), str(pair[1])
-                    key = (src, tgt)
-                    if key in seen_edges:
-                        continue
-                    seen_edges.add(key)
-                    graph.add_edge(
-                        EdgeRecord(
-                            source=src,
-                            target=tgt,
-                            relation="RELATED",
-                            weight=1.0,
-                            metadata={},
-                        )
-                    )
-
-            if keep_source_reference:
-                for node in graph.nodes.values():
-                    node.metadata.setdefault("_source_path", str(source_path))
-                    node.metadata.setdefault("_source_style", "lightrag")
-
-            return graph  # type: ignore[return-value]
-
-        # ── Full-path: load vdb files (slow for large graphs, includes embeddings)
-        # Use LIGHTRAG_FORCE_VDB=1 to reach this path, or when kv_store files are absent.
+        # ── Load vdb files (slow for large graphs, includes embeddings)
         node_col = None
         edge_col = None
         db_path = os.getenv("VECTOR_STORE_PATH", "./data/database/chroma_db")
@@ -228,95 +199,146 @@ class LightRAGAdapter(GraphAdapter):
         edge_docs: List[str] = []
         edge_metas: List[Dict[str, Any]] = []
 
-        for raw, matrix_row in _iter_vdb_items(node_file, load_embeddings=load_embeddings):
-            node_id = raw.get("entity_name") or raw.get("id") or raw.get("__id__")
-            if node_id is None:
-                continue
-            node_id = str(node_id)
+        nodes_start = time.perf_counter()
+        _maybe_pdb("before node load")
+        for raw_batch, matrix_batch in tqdm(
+            _iter_vdb_batches(node_file, load_embeddings=load_embeddings, batch_size=batch_size),
+            desc="Loading nodes",
+            unit="batch",
+        ):
+            if load_embeddings:
+                if matrix_batch and any(row is not None for row in matrix_batch):
+                    embeddings = [to_float_list(row) for row in matrix_batch]
+                else:
+                    encoded = [
+                        (r.get("__vector__") or r.get("embedding") or r.get("vector"))
+                        if isinstance(r, dict)
+                        else None
+                        for r in raw_batch
+                    ]
+                    embeddings = _decode_vector_batch(encoded)
+            else:
+                embeddings = [None] * len(raw_batch)
 
-            embedding = _vector_from_item(raw, matrix_row) if load_embeddings else None
-            metadata = {
-                k: v
-                for k, v in raw.items()
-                if k not in {"entity_name", "id", "__id__", "content", "vector", "__vector__", "embedding"}
-            }
-            if "__id__" in raw:
-                metadata.setdefault("lightrag_id", raw["__id__"])
+            for raw, embedding in zip(raw_batch, embeddings):
+                node_id = raw.get("entity_name") or raw.get("id") or raw.get("__id__")
+                if node_id is None:
+                    continue
+                node_id = str(node_id)
 
-            node = NodeRecord(
-                id=node_id,
-                type=str(raw.get("type", "Entity")),
-                text=raw.get("content"),
-                embedding=embedding,
-                metadata=metadata,
-            )
-            graph.add_node(node)
-            if node_col is not None and embedding is not None:
-                node_ids.append(node_id)
-                node_embs.append(embedding)
-                node_docs.append(node.text or "")
-                node_metas.append(dict(node.metadata))
-                if len(node_ids) >= batch_size:
-                    _flush_upsert(node_col, node_ids, node_embs, node_docs, node_metas)
-
-        for i, (raw, matrix_row) in enumerate(_iter_vdb_items(edge_file, load_embeddings=load_embeddings)):
-            source_id = raw.get("src_id") or raw.get("source") or raw.get("src")
-            target_id = raw.get("tgt_id") or raw.get("target") or raw.get("tgt")
-            if source_id is None or target_id is None:
-                continue
-            source_id, target_id = str(source_id), str(target_id)
-
-            try:
-                weight = float(raw.get("weight", 1.0))
-            except (TypeError, ValueError):
-                weight = 1.0
-            relation = str(raw.get("relation", "RELATED"))
-
-            metadata = {
-                k: v
-                for k, v in raw.items()
-                if k
-                not in {
-                    "src_id",
-                    "tgt_id",
-                    "source",
-                    "target",
-                    "src",
-                    "tgt",
-                    "relation",
-                    "weight",
-                    "vector",
-                    "__vector__",
-                    "embedding",
+                metadata = {
+                    k: v
+                    for k, v in raw.items()
+                    if k not in {"entity_name", "id", "__id__", "content", "vector", "__vector__", "embedding"}
                 }
-            }
-            edge = EdgeRecord(
-                source=source_id,
-                target=target_id,
-                relation=relation,
-                weight=weight,
-                metadata=metadata,
-            )
-            graph.add_edge(edge)
-            edge_embedding = _vector_from_item(raw, matrix_row) if load_embeddings else None
-            if edge_col is not None and edge_embedding is not None:
-                edge_id = str(raw.get("__id__", f"{source_id}->{target_id}#{i}"))
-                edge_ids.append(edge_id)
-                edge_embs.append(edge_embedding)
-                edge_docs.append(f"{source_id} {relation} {target_id}")
-                edge_metas.append(
-                    {
-                        "source": source_id,
-                        "target": target_id,
-                        "relation": relation,
-                        "weight": weight,
-                        **metadata,
-                    }
+                if "__id__" in raw:
+                    metadata.setdefault("lightrag_id", raw["__id__"])
+
+                node = NodeRecord(
+                    id=node_id,
+                    type=str(raw.get("type", "Entity")),
+                    text=raw.get("content"),
+                    embedding=embedding,
+                    metadata=metadata,
                 )
-                if len(edge_ids) >= batch_size:
-                    _flush_upsert(edge_col, edge_ids, edge_embs, edge_docs, edge_metas)
+                graph.add_node(node)
+                if node_col is not None and embedding is not None:
+                    node_ids.append(node_id)
+                    node_embs.append(embedding)
+                    node_docs.append(node.text or "")
+                    node_metas.append(dict(node.metadata))
+                    if len(node_ids) >= batch_size:
+                        _flush_upsert(node_col, node_ids, node_embs, node_docs, node_metas)
+
+        _log_timing("node load complete", nodes_start)
+        _maybe_pdb("after node load")
+
+        edges_start = time.perf_counter()
+        _maybe_pdb("before edge load")
+        edge_i = 0
+        for raw_batch, matrix_batch in tqdm(
+            _iter_vdb_batches(edge_file, load_embeddings=load_embeddings, batch_size=batch_size),
+            desc="Loading edges",
+            unit="batch",
+        ):
+            if load_embeddings and load_edge_embeddings:
+                if matrix_batch and any(row is not None for row in matrix_batch):
+                    embeddings = [to_float_list(row) for row in matrix_batch]
+                else:
+                    encoded = [
+                        (r.get("__vector__") or r.get("embedding") or r.get("vector"))
+                        if isinstance(r, dict)
+                        else None
+                        for r in raw_batch
+                    ]
+                    embeddings = _decode_vector_batch(encoded)
+            else:
+                embeddings = [None] * len(raw_batch)
+
+            for raw, edge_embedding in zip(raw_batch, embeddings):
+                i = edge_i
+                edge_i += 1
+                source_id = raw.get("src_id") or raw.get("source") or raw.get("src")
+                target_id = raw.get("tgt_id") or raw.get("target") or raw.get("tgt")
+                if source_id is None or target_id is None:
+                    continue
+                source_id, target_id = str(source_id), str(target_id)
+
+                try:
+                    weight = float(raw.get("weight", 1.0))
+                except (TypeError, ValueError):
+                    weight = 1.0
+                relation = str(raw.get("relation", "RELATED"))
+
+                metadata = {
+                    k: v
+                    for k, v in raw.items()
+                    if k
+                    not in {
+                        "src_id",
+                        "tgt_id",
+                        "source",
+                        "target",
+                        "src",
+                        "tgt",
+                        "relation",
+                        "weight",
+                        "vector",
+                        "__vector__",
+                        "embedding",
+                    }
+                }
+                edge = EdgeRecord(
+                    source=source_id,
+                    target=target_id,
+                    relation=relation,
+                    weight=weight,
+                    metadata=metadata,
+                )
+                graph.add_edge(edge)
+                if edge_col is not None and edge_embedding is not None:
+                    edge_id = str(raw.get("__id__", f"{source_id}->{target_id}#{i}"))
+                    edge_ids.append(edge_id)
+                    edge_embs.append(edge_embedding)
+                    edge_docs.append(f"{source_id} {relation} {target_id}")
+                    edge_metas.append(
+                        {
+                            "source": source_id,
+                            "target": target_id,
+                            "relation": relation,
+                            "weight": weight,
+                            **metadata,
+                        }
+                    )
+                    if len(edge_ids) >= batch_size:
+                        _flush_upsert(edge_col, edge_ids, edge_embs, edge_docs, edge_metas)
+
+        _log_timing("edge load complete", edges_start)
+        _maybe_pdb("after edge load")
 
         if node_col is not None:
+            index_start = time.perf_counter()
+            _maybe_pdb("before node index attach")
             _flush_upsert(node_col, node_ids, node_embs, node_docs, node_metas)
             graph.attach_index(
                 "node_vector",
@@ -326,7 +348,11 @@ class LightRAGAdapter(GraphAdapter):
                     distance_metric=str(distance_metric),
                 ),
             )
+            _log_timing("node index attach", index_start)
+            _maybe_pdb("after node index attach")
         if edge_col is not None:
+            index_start = time.perf_counter()
+            _maybe_pdb("before edge index attach")
             _flush_upsert(edge_col, edge_ids, edge_embs, edge_docs, edge_metas)
             graph.attach_index(
                 "edge_vector",
@@ -336,11 +362,16 @@ class LightRAGAdapter(GraphAdapter):
                     distance_metric=str(distance_metric),
                 ),
             )
+            _log_timing("edge index attach", index_start)
+            _maybe_pdb("after edge index attach")
 
         if keep_source_reference:
             for node in graph.nodes.values():
                 node.metadata.setdefault("_source_path", str(source_path))
                 node.metadata.setdefault("_source_style", "lightrag")
+
+        _log_timing("import complete", import_start)
+        _maybe_pdb("import complete")
 
         return graph
 

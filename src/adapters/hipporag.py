@@ -54,27 +54,6 @@ def _parse_fact_triple(raw_content: Any) -> Optional[Tuple[str, str, str]]:
     return None
 
 
-def _read_parquet(path: Path) -> Tuple[List[str], List[str], List[Any]]:
-    """Read a HippoRAG EmbeddingStore parquet file.
-
-    Returns (hash_ids, texts, embeddings).  If the file does not exist,
-    returns three empty lists so callers can degrade gracefully.
-    """
-    if not path.exists():
-        return [], [], []
-
-    try:
-        import pandas as pd
-    except ImportError as exc:
-        raise ImportError("pandas is required to read HippoRAG parquet files") from exc
-
-    df = pd.read_parquet(path)
-    hash_ids = df["hash_id"].values.tolist()
-    texts = df["content"].values.tolist()
-    embeddings = df["embedding"].values.tolist()
-    return hash_ids, texts, embeddings
-
-
 def _load_igraph(pickle_path: Path) -> Any:
     """Load an igraph Graph from a pickle file."""
     try:
@@ -86,7 +65,7 @@ def _load_igraph(pickle_path: Path) -> Any:
 
 
 def _iter_openie_triples(openie_path: Path):
-    """Yield (head, relation, tail) string-tuples from an OpenIE results file.
+    """Yield (head, relation, tail, passage_id, passage_text) tuples from OpenIE results.
 
     The file has the structure::
 
@@ -105,9 +84,10 @@ def _iter_openie_triples(openie_path: Path):
 
     for doc in data.get("docs", []):
         passage_id = doc.get("idx", "")
+        passage_text = doc.get("passage", "")
         for triple in doc.get("extracted_triples", []):
             if isinstance(triple, (list, tuple)) and len(triple) == 3:
-                yield str(triple[0]), str(triple[1]), str(triple[2]), passage_id
+                yield str(triple[0]), str(triple[1]), str(triple[2]), passage_id, passage_text
 
 
 class HippoRAGAdapter(GraphAdapter):
@@ -117,17 +97,12 @@ class HippoRAGAdapter(GraphAdapter):
 
         <working_dir>/
             graph.pickle                         – igraph Graph (nodes + weighted edges)
-            entity_embeddings/
-                vdb_entity.parquet               – phrase/entity nodes
-            chunk_embeddings/
-                vdb_chunk.parquet                – passage/chunk nodes
-            fact_embeddings/
-                vdb_fact.parquet                 – triple-level facts
+            openie_results_ner_<llm>.json        – OpenIE triples (used here)
 
-    The ``openie_results_ner_<llm>.json`` file lives one level up
-    (in ``save_dir``) and is used to reconstruct edge *relations*.  The
-    adapter discovers it automatically by globbing the parent directory; you
-    can also pass ``openie_path`` as a kwarg to override this.
+    The ``openie_results_ner_<llm>.json`` file is used to reconstruct nodes
+    and edge relations. The adapter discovers it automatically by globbing
+    the working directory first, then the parent directory. You can also pass
+    ``openie_path`` as a kwarg to override this.
 
     The ``source`` argument should be the *working directory*
     (``{save_dir}/{llm_name}_{embedding_model_name}``).
@@ -139,10 +114,18 @@ class HippoRAGAdapter(GraphAdapter):
     def can_import(self, source: Any) -> bool:
         try:
             src = _normalize_source(source)
-            return (src / "graph.pickle").exists() and (
-                (src / "entity_embeddings" / "vdb_entity.parquet").exists()
-                or (src / "chunk_embeddings" / "vdb_chunk.parquet").exists()
-            )
+            if not (src / "graph.pickle").exists():
+                return False
+            if (src / "openie_results_ner_gpt-4o-mini.json").exists():
+                return True
+            if any((src / f).exists() for f in ["openie_results_ner_gpt-4o.json"]):
+                return True
+            # Fallback: allow any openie_results_ner_*.json in src or parent
+            if glob(str(src / "openie_results_ner_*.json")):
+                return True
+            if glob(str(src.parent / "openie_results_ner_*.json")):
+                return True
+            return False
         except Exception:
             return False
 
@@ -179,10 +162,6 @@ class HippoRAGAdapter(GraphAdapter):
         src = _normalize_source(source)
 
         graph_pickle = src / "graph.pickle"
-        entity_parquet = src / "entity_embeddings" / "vdb_entity.parquet"
-        chunk_parquet = src / "chunk_embeddings" / "vdb_chunk.parquet"
-        fact_parquet = src / "fact_embeddings" / "vdb_fact.parquet"
-
         if not graph_pickle.exists():
             raise UnsupportedSourceError(
                 f"HippoRAG graph.pickle not found under: {src}"
@@ -200,11 +179,9 @@ class HippoRAGAdapter(GraphAdapter):
             ig_graph = None
 
         # ------------------------------------------------------------------ #
-        # 2. Load embedding parquet files                                      #
+        # 2. OpenIE-only mode (no parquet)                                    #
         # ------------------------------------------------------------------ #
-        entity_ids, entity_texts, entity_embs = _read_parquet(entity_parquet)
-        chunk_ids, chunk_texts, chunk_embs = _read_parquet(chunk_parquet)
-        fact_ids, fact_texts, _ = _read_parquet(fact_parquet)
+        openie_only = True
 
         # ------------------------------------------------------------------ #
         # 3. Discover OpenIE file for relation labels                          #
@@ -213,20 +190,28 @@ class HippoRAGAdapter(GraphAdapter):
         if openie_path is not None:
             resolved_openie = Path(openie_path)
         else:
-            # Glob parent directory for openie_results_ner_*.json
-            parent = src.parent
-            matches = sorted(glob(str(parent / "openie_results_ner_*.json")))
+            # Prefer openie_results_ner_*.json under the working dir, then parent.
+            matches = sorted(glob(str(src / "openie_results_ner_*.json")))
+            if not matches:
+                parent = src.parent
+                matches = sorted(glob(str(parent / "openie_results_ner_*.json")))
             if matches:
                 resolved_openie = Path(matches[-1])
 
         # Build a set of known (head, tail) → relation for edge enrichment
         triple_relation_map: Dict[Tuple[str, str], str] = {}
+        entity_passage_map: Dict[str, str] = {}
+        edge_passage_map: Dict[Tuple[str, str], str] = {}
         if resolved_openie is not None:
-            for head, rel, tail, _ in _iter_openie_triples(resolved_openie):
+            for head, rel, tail, _, passage_text in _iter_openie_triples(resolved_openie):
                 head_key = _normalize_text_key(head)
                 tail_key = _normalize_text_key(tail)
                 if head_key and tail_key:
                     triple_relation_map[(head_key, tail_key)] = rel
+                    if passage_text:
+                        entity_passage_map.setdefault(head_key, passage_text)
+                        entity_passage_map.setdefault(tail_key, passage_text)
+                        edge_passage_map.setdefault((head_key, tail_key), passage_text)
 
         # ------------------------------------------------------------------ #
         # 4. Populate the graph container                                      #
@@ -236,136 +221,94 @@ class HippoRAGAdapter(GraphAdapter):
         graph.edges = []
         graph._adj = {}
         entity_text_to_ids: Dict[str, List[str]] = {}
-
-        # Entity nodes (phrase nodes)
-        for hash_id, text, emb in zip(entity_ids, entity_texts, entity_embs):
-            node_id = str(hash_id)
-            node_text = None if text is None else str(text)
-            metadata: Dict[str, Any] = {"hash_id": node_id}
-            if keep_source_reference:
-                metadata["_source_path"] = str(src)
-                metadata["_source_style"] = "hipporag"
-            graph.add_node(
-                NodeRecord(
-                    id=node_id,
-                    type="Entity",
-                    text=node_text,
-                    embedding=emb if load_embeddings else None,
-                    metadata=metadata,
-                )
-            )
-            text_key = _normalize_text_key(node_text)
-            if text_key:
-                entity_text_to_ids.setdefault(text_key, []).append(node_id)
-
-        # Chunk / passage nodes
-        for hash_id, text, emb in zip(chunk_ids, chunk_texts, chunk_embs):
-            node_id = str(hash_id)
-            node_text = None if text is None else str(text)
-            metadata: Dict[str, Any] = {"hash_id": node_id}
-            if keep_source_reference:
-                metadata["_source_path"] = str(src)
-                metadata["_source_style"] = "hipporag"
-            graph.add_node(
-                NodeRecord(
-                    id=node_id,
-                    type="Chunk",
-                    text=node_text,
-                    embedding=emb if load_embeddings else None,
-                    metadata=metadata,
-                )
-            )
+        openie_seeded = False
 
         edge_key_to_index: Dict[Tuple[str, str, str], int] = {}
         fact_relation_by_node_ids: Dict[Tuple[str, str], str] = {}
 
         # ------------------------------------------------------------------ #
-        # 5. Add fact edges from vdb_fact.parquet                             #
+        # 4.5 Build nodes/edges directly from OpenIE triples                   #
         # ------------------------------------------------------------------ #
-        for fact_id, fact_content in zip(fact_ids, fact_texts):
-            triple = _parse_fact_triple(fact_content)
-            if triple is None:
-                continue
+        if resolved_openie is not None:
+            for head, rel, tail, passage_id, passage_text in _iter_openie_triples(resolved_openie):
+                head_key = _normalize_text_key(head)
+                tail_key = _normalize_text_key(tail)
+                if not head_key or not tail_key:
+                    continue
 
-            head, relation, tail = triple
-            head_key = _normalize_text_key(head)
-            tail_key = _normalize_text_key(tail)
-            if not head_key or not tail_key:
-                continue
+                source_id = _entity_hash_id(head_key)
+                target_id = _entity_hash_id(tail_key)
 
-            source_id = (
-                entity_text_to_ids[head_key][0]
-                if head_key in entity_text_to_ids
-                else _entity_hash_id(head_key)
-            )
-            target_id = (
-                entity_text_to_ids[tail_key][0]
-                if tail_key in entity_text_to_ids
-                else _entity_hash_id(tail_key)
-            )
+                if source_id not in graph.nodes:
+                    metadata: Dict[str, Any] = {
+                        "inferred_from_openie": True,
+                        "original_label": source_id,
+                    }
+                    if passage_id:
+                        metadata["openie_passage_id"] = str(passage_id)
+                    if passage_text:
+                        metadata["passage"] = passage_text
+                    if keep_source_reference:
+                        metadata["_source_path"] = str(src)
+                        metadata["_source_style"] = "hipporag"
+                    graph.add_node(
+                        NodeRecord(
+                            id=source_id,
+                            type="Entity",
+                            text=head,
+                            embedding=None,
+                            metadata=metadata,
+                        )
+                    )
+                    entity_text_to_ids.setdefault(head_key, []).append(source_id)
 
-            if source_id not in graph.nodes:
-                metadata: Dict[str, Any] = {
-                    "hash_id": source_id,
-                    "inferred_from_fact": True,
-                }
-                if keep_source_reference:
-                    metadata["_source_path"] = str(src)
-                    metadata["_source_style"] = "hipporag"
-                graph.add_node(
-                    NodeRecord(
-                        id=source_id,
-                        type="Entity",
-                        text=head_key,
-                        embedding=None,
-                        metadata=metadata,
+                if target_id not in graph.nodes:
+                    metadata = {
+                        "inferred_from_openie": True,
+                        "original_label": target_id,
+                    }
+                    if passage_id:
+                        metadata["openie_passage_id"] = str(passage_id)
+                    if passage_text:
+                        metadata["passage"] = passage_text
+                    if keep_source_reference:
+                        metadata["_source_path"] = str(src)
+                        metadata["_source_style"] = "hipporag"
+                    graph.add_node(
+                        NodeRecord(
+                            id=target_id,
+                            type="Entity",
+                            text=tail,
+                            embedding=None,
+                            metadata=metadata,
+                        )
+                    )
+                    entity_text_to_ids.setdefault(tail_key, []).append(target_id)
+
+                relation_text = str(rel).strip() if rel is not None else ""
+                if not relation_text:
+                    relation_text = "related"
+
+                edge_key = (source_id, target_id, relation_text)
+                if edge_key in edge_key_to_index:
+                    continue
+                graph.add_edge(
+                    EdgeRecord(
+                        source=source_id,
+                        target=target_id,
+                        relation=relation_text,
+                        weight=1.0,
+                        metadata={
+                            "source": "openie",
+                            "passage": passage_text,
+                            "openie_passage_id": str(passage_id) if passage_id else None,
+                        },
                     )
                 )
-                entity_text_to_ids.setdefault(head_key, []).append(source_id)
+                edge_key_to_index[edge_key] = len(graph.edges) - 1
+                openie_seeded = True
 
-            if target_id not in graph.nodes:
-                metadata = {
-                    "hash_id": target_id,
-                    "inferred_from_fact": True,
-                }
-                if keep_source_reference:
-                    metadata["_source_path"] = str(src)
-                    metadata["_source_style"] = "hipporag"
-                graph.add_node(
-                    NodeRecord(
-                        id=target_id,
-                        type="Entity",
-                        text=tail_key,
-                        embedding=None,
-                        metadata=metadata,
-                    )
-                )
-                entity_text_to_ids.setdefault(tail_key, []).append(target_id)
-
-            relation_text = str(relation).strip() if relation is not None else ""
-            if not relation_text:
-                relation_text = "related"
-
-            edge_key = (source_id, target_id, relation_text)
-            if edge_key in edge_key_to_index:
-                continue
-
-            graph.add_edge(
-                EdgeRecord(
-                    source=source_id,
-                    target=target_id,
-                    relation=relation_text,
-                    weight=1.0,
-                    metadata={
-                        "source": "vdb_fact",
-                        "fact_hash_id": str(fact_id),
-                    },
-                )
-            )
-            edge_key_to_index[edge_key] = len(graph.edges) - 1
-            fact_relation_by_node_ids.setdefault((source_id, target_id), relation_text)
-
-        # Guard: if no nodes were loaded from parquet, surface igraph vertices
+        # Guard: if OpenIE produced no nodes, surface igraph vertices
         if ig_graph is not None and not graph.nodes and ig_graph.vcount() > 0:
             for v in ig_graph.vs:
                 vid = v["name"] if "name" in v.attributes() else str(v.index)
@@ -387,7 +330,7 @@ class HippoRAGAdapter(GraphAdapter):
         # ------------------------------------------------------------------ #
         # 6. Add edges from igraph (topology + weight)                         #
         # ------------------------------------------------------------------ #
-        if ig_graph is not None:
+        if ig_graph is not None and graph.nodes and not openie_only:
             for edge in ig_graph.es:
                 src_v = ig_graph.vs[edge.source]
                 tgt_v = ig_graph.vs[edge.target]
@@ -401,13 +344,22 @@ class HippoRAGAdapter(GraphAdapter):
 
                 relation = fact_relation_by_node_ids.get((src_id, tgt_id))
                 if relation is None:
-                    src_text_key = _normalize_text_key(
-                        graph.nodes[src_id].text if src_id in graph.nodes else ""
-                    )
-                    tgt_text_key = _normalize_text_key(
-                        graph.nodes[tgt_id].text if tgt_id in graph.nodes else ""
-                    )
+                    src_label = ""
+                    tgt_label = ""
+                    if src_id in graph.nodes:
+                        src_label = graph.nodes[src_id].metadata.get("entity_name") or graph.nodes[src_id].text or ""
+                    if tgt_id in graph.nodes:
+                        tgt_label = graph.nodes[tgt_id].metadata.get("entity_name") or graph.nodes[tgt_id].text or ""
+                    src_text_key = _normalize_text_key(src_label)
+                    tgt_text_key = _normalize_text_key(tgt_label)
                     relation = triple_relation_map.get((src_text_key, tgt_text_key), "related")
+                passage_text = None
+                if src_id in graph.nodes and tgt_id in graph.nodes:
+                    src_label = graph.nodes[src_id].metadata.get("entity_name") or ""
+                    tgt_label = graph.nodes[tgt_id].metadata.get("entity_name") or ""
+                    src_key = _normalize_text_key(src_label)
+                    tgt_key = _normalize_text_key(tgt_label)
+                    passage_text = edge_passage_map.get((src_key, tgt_key))
 
                 edge_key = (src_id, tgt_id, relation)
                 if edge_key in edge_key_to_index:
@@ -422,7 +374,10 @@ class HippoRAGAdapter(GraphAdapter):
                         target=tgt_id,
                         relation=relation,
                         weight=weight,
-                        metadata={"source": "igraph"},
+                        metadata={
+                            "source": "igraph",
+                            "passage": passage_text,
+                        },
                     )
                 )
                 edge_key_to_index[edge_key] = len(graph.edges) - 1
