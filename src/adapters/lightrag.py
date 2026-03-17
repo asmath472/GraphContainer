@@ -6,11 +6,9 @@ import json
 import os
 import time
 import zlib
-from itertools import islice
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from tqdm import tqdm
-import pdb
 
 import dotenv
 from ..core import SearchableGraphContainer, SimpleGraphContainer
@@ -78,33 +76,60 @@ def _decode_vector_batch(encoded_list: List[Optional[str]]) -> List[Optional[Lis
 def _iter_vdb_batches(
     path: Path, *, load_embeddings: bool, batch_size: int
 ) -> Iterable[Tuple[List[Dict[str, Any]], List[Any]]]:
+    # When embeddings are required, load once and slice in memory.
+    # This avoids any ambiguity about repeated file reads while batching.
+    if load_embeddings:
+        _log(f"using single-pass json.load path for {path.name} (embeddings enabled)")
+        with path.open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+        data = payload.get("data", [])
+        matrix = payload.get("matrix", [])
+        for i in range(0, len(data), batch_size):
+            raw_batch = data[i : i + batch_size]
+            matrix_batch = matrix[i : i + batch_size] if isinstance(matrix, list) else []
+            items: List[Dict[str, Any]] = []
+            rows: List[Any] = []
+            for j, item in enumerate(raw_batch):
+                if not isinstance(item, dict):
+                    continue
+                items.append(item)
+                rows.append(matrix_batch[j] if j < len(matrix_batch) else None)
+            if not items:
+                continue
+            yield items, rows
+        return
+
+    # Embeddings disabled: prefer low-memory streaming when available.
     try:
         import ijson  # type: ignore
     except Exception:
         ijson = None
 
-    if ijson is None:
-        _log(f"using json.load path for {path.name}")
-        with path.open("r", encoding="utf-8") as f:
-            payload = json.load(f)
-        data = payload.get("data", [])
-        matrix = payload.get("matrix", []) if load_embeddings else []
-        for i in range(0, len(data), batch_size):
-            items = [x for x in data[i : i + batch_size] if isinstance(x, dict)]
-            rows = matrix[i : i + batch_size] if load_embeddings else [None] * len(items)
-            yield items, rows
+    if ijson is not None:
+        _log(f"using ijson streaming path for {path.name} (embeddings disabled)")
+        with path.open("rb") as f:
+            parser = ijson.items(f, "data.item")
+            items: List[Dict[str, Any]] = []
+            for item in parser:
+                if not isinstance(item, dict):
+                    continue
+                items.append(item)
+                if len(items) >= batch_size:
+                    yield items, [None] * len(items)
+                    items = []
+            if items:
+                yield items, [None] * len(items)
         return
 
-    _log(f"using ijson streaming path for {path.name}")
-    with path.open("rb") as f:
-        it = ijson.items(f, "data.item")
-        while True:
-            batch = list(islice(it, batch_size))
-            if not batch:
-                break
-            items = [x for x in batch if isinstance(x, dict)]
-            rows = [None] * len(items)  # streaming path has no matrix
-            yield items, rows
+    _log(f"using json.load path for {path.name} (embeddings disabled)")
+    with path.open("r", encoding="utf-8") as f:
+        payload = json.load(f)
+    data = payload.get("data", [])
+    for i in range(0, len(data), batch_size):
+        items = [x for x in data[i : i + batch_size] if isinstance(x, dict)]
+        if not items:
+            continue
+        yield items, [None] * len(items)
 
 
 def _flush_upsert(
