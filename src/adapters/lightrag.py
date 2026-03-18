@@ -221,7 +221,7 @@ class LightRAGAdapter(GraphAdapter):
                 embeddings = [None] * len(raw_batch)
 
             for raw, embedding in zip(raw_batch, embeddings):
-                node_id = raw.get("entity_name") or raw.get("id") or raw.get("__id__")
+                node_id = raw.get("id") or raw.get("__id__")
                 if node_id is None:
                     continue
                 node_id = str(node_id)
@@ -229,10 +229,8 @@ class LightRAGAdapter(GraphAdapter):
                 metadata = {
                     k: v
                     for k, v in raw.items()
-                    if k not in {"entity_name", "id", "__id__", "content", "vector", "__vector__", "embedding"}
+                    if k not in {"id", "__id__", "content", "vector", "__vector__", "embedding"}
                 }
-                if "__id__" in raw:
-                    metadata.setdefault("lightrag_id", raw["__id__"])
 
                 node = NodeRecord(
                     id=node_id,
