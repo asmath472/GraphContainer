@@ -53,7 +53,7 @@ def embed_query(
             visualizer.update_session(
                 session_id,
                 metadata={"embedding_error": message},
-                progress={"current": 22, "total": 100, "message": "Embedding failed"},
+                progress={"message": "Embedding failed"},
             )
         if normalize_error_policy(embedding_error_policy) == "fallback":
             return []

@@ -210,6 +210,16 @@ body {
   font-size: 12px;
 }
 
+.import-field {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+#import-file-group {
+  display: grid;
+  gap: 8px;
+}
+
 #import-form input:focus,
 #import-form select:focus {
   outline: none;
@@ -223,20 +233,50 @@ body {
   margin-top: 6px;
 }
 
-#import-submit {
+.import-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.import-checkbox input[type="checkbox"] {
+  accent-color: var(--accent-color-2);
+}
+
+.import-progress {
+  position: relative;
   margin-top: 6px;
   padding: 10px 14px;
   border-radius: 10px;
   border: none;
-  background: var(--accent-color);
+  background: linear-gradient(120deg, var(--accent-color), var(--accent-color-2));
   color: var(--text-inverse);
   font-size: 13px;
   cursor: pointer;
+  overflow: hidden;
+  text-align: center;
 }
 
-#import-submit:hover {
-  opacity: 0.95;
-  transform: translateY(-1px);
+.import-progress:disabled {
+  cursor: not-allowed;
+  opacity: 0.9;
+}
+
+.import-progress-fill {
+  position: absolute;
+  inset: 0;
+  width: 0%;
+  background: linear-gradient(120deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.05));
+  transition: width 0.2s ease;
+  z-index: 0;
+}
+
+.import-progress-label {
+  position: relative;
+  z-index: 1;
+  color: var(--text-inverse);
 }
 
 .import-status {
@@ -247,6 +287,36 @@ body {
 
 .hidden {
   display: none !important;
+}
+
+.import-info-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 4px 0 6px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  background: rgba(16, 185, 129, 0.12);
+  color: #b7f7d2;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.import-info-note-icon {
+  font-size: 13px;
+  line-height: 1.4;
+  color: #34d399;
+}
+
+:root[data-theme="light"] .import-info-note {
+  color: #166534;
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(22, 101, 52, 0.35);
+}
+
+:root[data-theme="light"] .import-info-note-icon {
+  color: #16a34a;
 }
 
 #theme-toggle {

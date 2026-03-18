@@ -45,12 +45,15 @@
 
   const importForm = document.getElementById("import-form");
   const importAdapterSelect = document.getElementById("import-adapter");
-  const importLabelInput = document.getElementById("import-label");
-  const importFilesInput = document.getElementById("import-files");
+  const importDatasetNameInput = document.getElementById("import-dataset-name");
+  const importZipInput = document.getElementById("import-zip");
   const importDatasetInput = document.getElementById("import-dataset");
   const importFileGroup = document.getElementById("import-file-group");
   const importDatasetGroup = document.getElementById("import-dataset-group");
   const importStatus = document.getElementById("import-status");
+  const importFastInsightWarning = document.getElementById("import-fastinsight-warning");
+  const importProgressFill = document.getElementById("import-progress-fill");
+  const importProgressLabel = document.getElementById("import-progress-label");
 
   const network = new vis.Network(
     document.getElementById("network"),
@@ -130,12 +133,13 @@
     if (!rawGraph || typeof rawGraph !== "object") return null;
     const name = String(rawGraph.name || "").trim();
     if (!name) return null;
+    const graphType = String(rawGraph.graph_type || rawGraph.graphType || "").trim().toLowerCase();
     const rawIndexes = Array.isArray(rawGraph.indexes) ? rawGraph.indexes : [];
     const indexes = rawIndexes
       .map((item) => String(item || "").trim())
       .filter((item) => item.length > 0);
     const hasNodeVectorIndex = Boolean(rawGraph.has_node_vector_index) || indexes.includes("node_vector");
-    return { name, indexes, hasNodeVectorIndex };
+    return { name, indexes, hasNodeVectorIndex, graphType };
   }
 
   function cacheGraphCapabilities(rawGraphs) {
@@ -379,6 +383,15 @@
     }
   }
 
+  function parseEdgeMeta(edgeMeta) {
+    if (typeof edgeMeta !== "string") return edgeMeta || {};
+    try {
+      return JSON.parse(edgeMeta);
+    } catch (_) {
+      return edgeMeta;
+    }
+  }
+
   function restartPhysics() {
     network.setOptions({
       physics: {
@@ -457,14 +470,19 @@
     return raw.replace(/^session\s*:\s*/i, "").trim();
   }
 
+  function getProgressStep(progress) {
+    const rawStep = Number((progress && (progress.step || progress.current)) || 0);
+    if (!Number.isFinite(rawStep)) return 0;
+    return Math.max(0, Math.trunc(rawStep));
+  }
+
   function updateProgressBar(progress) {
     const p = progress || {};
-    let percent = Number(p.percent || 0);
-    percent = Math.max(0, Math.min(100, percent));
-    progressFill.style.width = `${percent}%`;
-    progressText.innerHTML = `<span style="color:var(--accent-color); font-weight:bold;">${percent.toFixed(
-      1
-    )}%</span> - ${p.message || "Processing"}`;
+    const step = getProgressStep(p);
+    progressFill.style.width = step > 0 ? "100%" : "0%";
+    progressText.innerHTML = `<span style="color:var(--accent-color); font-weight:bold;">Step ${
+      step || 0
+    }</span> - ${p.message || "Processing"}`;
   }
 
   function cloneReplayView(view) {
@@ -533,7 +551,7 @@
     const effectiveIndex = cursor === null ? maxIndex : cursor;
     const entry = history[effectiveIndex];
     const progress = entry && entry.view && entry.view.progress ? entry.view.progress : {};
-    const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+    const step = getProgressStep(progress);
     const message = String(progress.message || "Processing");
     const mode = cursor === null ? "Live" : "Replay";
 
@@ -544,7 +562,7 @@
     if (replayLiveBtn) replayLiveBtn.disabled = cursor === null;
 
     setReplayStatusText(
-      `${mode} ${effectiveIndex + 1}/${history.length} · ${percent.toFixed(1)}% · ${message}`
+      `${mode} ${effectiveIndex + 1}/${history.length} · Step ${step} · ${message}`
     );
   }
 
@@ -554,12 +572,14 @@
     const snapshot = cloneReplayView(view);
     const last = history.length ? history[history.length - 1] : null;
     const currentProgress = snapshot.progress || {};
-    const currentPercent = Number(currentProgress.percent || 0);
+    const currentStep = getProgressStep(currentProgress);
+    const currentSignature = buildMiniSnapshotSignature(snapshot);
 
     if (last) {
       const lastProgress = (last.view && last.view.progress) || {};
-      const lastPercent = Number(lastProgress.percent || 0);
-      if (Math.abs(currentPercent - lastPercent) < 0.0001) {
+      const lastStep = getProgressStep(lastProgress);
+      const lastSignature = buildMiniSnapshotSignature(last.view || {});
+      if (currentStep === lastStep && currentSignature === lastSignature) {
         return;
       }
     }
@@ -890,21 +910,32 @@
       edges: miniEdges,
       network: miniNetwork,
       nodePayloadById: new Map(),
+      edgePayloadById: new Map(),
       selectedNodeId: null,
+      selectedEdgeId: null,
       hasInitialView: false,
       lastLayoutSignature: "",
       lastSnapshotSignature: "",
       frozenAfterRetrieval: false,
     };
     miniNetwork.on("click", (params) => {
-      if (!params.nodes.length) {
-        renderer.selectedNodeId = null;
-        renderMiniNodeDetail(messageId, null);
+      if (params.nodes.length) {
+        const nodeId = params.nodes[0];
+        renderer.selectedNodeId = nodeId;
+        renderer.selectedEdgeId = null;
+        renderMiniNodeDetail(messageId, renderer.nodePayloadById.get(nodeId) || null);
         return;
       }
-      const nodeId = params.nodes[0];
-      renderer.selectedNodeId = nodeId;
-      renderMiniNodeDetail(messageId, renderer.nodePayloadById.get(nodeId) || null);
+      if (params.edges.length) {
+        const edgeId = params.edges[0];
+        renderer.selectedEdgeId = edgeId;
+        renderer.selectedNodeId = null;
+        renderMiniEdgeDetail(messageId, renderer.edgePayloadById.get(edgeId) || null);
+        return;
+      }
+      renderer.selectedNodeId = null;
+      renderer.selectedEdgeId = null;
+      renderMiniNodeDetail(messageId, null);
     });
     chatMiniRenderers.set(messageId, renderer);
     return renderer;
@@ -930,9 +961,14 @@
       renderer.frozenAfterRetrieval = stage !== "retrieving";
 
       renderer.nodePayloadById.clear();
+      renderer.edgePayloadById.clear();
       for (const rawNode of view.nodes || []) {
         if (!rawNode || rawNode.id === undefined || rawNode.id === null) continue;
         renderer.nodePayloadById.set(rawNode.id, rawNode);
+      }
+      for (const rawEdge of view.edges || []) {
+        if (!rawEdge || rawEdge.id === undefined || rawEdge.id === null) continue;
+        renderer.edgePayloadById.set(rawEdge.id, rawEdge);
       }
 
       const miniNodes = (view.nodes || []).map(toMiniGraphNode);
@@ -1055,8 +1091,12 @@
       if (renderer.selectedNodeId && renderer.nodePayloadById.has(renderer.selectedNodeId)) {
         renderer.network.selectNodes([renderer.selectedNodeId]);
         renderMiniNodeDetail(messageId, renderer.nodePayloadById.get(renderer.selectedNodeId));
+      } else if (renderer.selectedEdgeId && renderer.edgePayloadById.has(renderer.selectedEdgeId)) {
+        renderer.network.selectEdges([renderer.selectedEdgeId]);
+        renderMiniEdgeDetail(messageId, renderer.edgePayloadById.get(renderer.selectedEdgeId));
       } else {
         renderer.selectedNodeId = null;
+        renderer.selectedEdgeId = null;
         renderMiniNodeDetail(messageId, null);
       }
 
@@ -1145,7 +1185,9 @@
       ""
     ).trim();
     const capability = graphCapabilitiesByName.get(graphName) || null;
-    const shouldWarn = retrieval === "fastinsight" && (!capability || !capability.hasNodeVectorIndex);
+    const shouldWarn =
+      retrieval === "fastinsight" &&
+      (!capability || capability.graphType !== "fastinsight" || !capability.hasNodeVectorIndex);
 
     if (!shouldWarn) {
       chatRetrievalWarning.classList.add("hidden");
@@ -1267,7 +1309,7 @@
         const miniNodeDetail = document.createElement("pre");
         miniNodeDetail.className = "msg-mini-session-node-detail is-placeholder";
         miniNodeDetail.id = `msg-mini-node-detail-${messageId}`;
-        miniNodeDetail.textContent = "Click a node to inspect node text and metadata.";
+        miniNodeDetail.textContent = "Click a node or edge to inspect details.";
 
         miniWrap.appendChild(miniGraph);
         miniWrap.appendChild(miniSessionId);
@@ -1783,7 +1825,7 @@
     if (!detail) return;
     if (!node) {
       detail.classList.add("is-placeholder");
-      detail.textContent = "Click a node to inspect node text and metadata.";
+      detail.textContent = "Click a node or edge to inspect details.";
       return;
     }
 
@@ -1793,6 +1835,27 @@
       type: node.node_type || node.group || "",
       text: node.node_text || "",
       metadata: parseNodeMeta(node.node_meta),
+    };
+    detail.classList.remove("is-placeholder");
+    detail.textContent = JSON.stringify(payload, null, 2);
+  }
+
+  function renderMiniEdgeDetail(messageId, edge) {
+    const detail = document.getElementById(`msg-mini-node-detail-${messageId}`);
+    if (!detail) return;
+    if (!edge) {
+      detail.classList.add("is-placeholder");
+      detail.textContent = "Click a node or edge to inspect details.";
+      return;
+    }
+
+    const payload = {
+      id: edge.id,
+      source: edge.from,
+      target: edge.to,
+      relation: edge.relation || edge.label || "",
+      weight: edge.edge_weight,
+      metadata: parseEdgeMeta(edge.edge_meta),
     };
     detail.classList.remove("is-placeholder");
     detail.textContent = JSON.stringify(payload, null, 2);
@@ -1835,8 +1898,8 @@
   };
 
   network.on("click", function (params) {
-    if (!params.nodes.length) {
-      detailEl.textContent = "Please select a node.";
+    if (!params.nodes.length && !params.edges.length) {
+      detailEl.textContent = "Please select a node or edge.";
       return;
     }
 
@@ -1844,18 +1907,35 @@
       toggleSidePanel();
     }
 
-    const node = nodes.get(params.nodes[0]);
-    if (!node) {
-      detailEl.textContent = "Selected node is unavailable.";
+    if (params.nodes.length) {
+      const node = nodes.get(params.nodes[0]);
+      if (!node) {
+        detailEl.textContent = "Selected node is unavailable.";
+        return;
+      }
+      const payload = {
+        id: node.id,
+        label: node.label || "",
+        type: node.node_type || node.group || "",
+        text: node.node_text || "",
+        metadata: parseNodeMeta(node.node_meta),
+      };
+      detailEl.textContent = JSON.stringify(payload, null, 2);
       return;
     }
 
+    const edge = edges.get(params.edges[0]);
+    if (!edge) {
+      detailEl.textContent = "Selected edge is unavailable.";
+      return;
+    }
     const payload = {
-      id: node.id,
-      label: node.label || "",
-      type: node.node_type || node.group || "",
-      text: node.node_text || "",
-      metadata: parseNodeMeta(node.node_meta),
+      id: edge.id,
+      source: edge.from,
+      target: edge.to,
+      relation: edge.relation || edge.label || "",
+      weight: edge.edge_weight,
+      metadata: parseEdgeMeta(edge.edge_meta),
     };
     detailEl.textContent = JSON.stringify(payload, null, 2);
   });
@@ -1881,6 +1961,10 @@
     const isFreebase = adapter === "freebasekg";
     importFileGroup.classList.toggle("hidden", isFreebase);
     importDatasetGroup.classList.toggle("hidden", !isFreebase);
+    if (importFastInsightWarning) {
+      importFastInsightWarning.classList.remove("hidden");
+      importFastInsightWarning.setAttribute("aria-hidden", "false");
+    }
   }
 
   if (importAdapterSelect) {
@@ -1893,36 +1977,75 @@
       event.preventDefault();
       if (!importAdapterSelect) return;
       const adapter = importAdapterSelect.value;
-      const label = importLabelInput ? importLabelInput.value.trim() : "";
+      const datasetName = importDatasetNameInput ? importDatasetNameInput.value.trim() : "";
+      if (!datasetName) {
+        if (importStatus) importStatus.textContent = "Dataset Name is required.";
+        return;
+      }
+      if (adapter === "fastinsight") {
+        if (importStatus) {
+          importStatus.textContent =
+            "FastInsight requires a dense vector index (`node_vector`). This graph does not provide one. Choose One-Hop/Vector, or switch to a graph with a dense index.";
+        }
+        return;
+      }
+      const label = `${adapter}:${datasetName}`;
       const formData = new FormData();
       formData.append("adapter", adapter);
-      if (label) formData.append("label", label);
+      formData.append("label", label);
+      formData.append("dataset_name", datasetName);
 
       if (adapter === "freebasekg") {
-        const datasetName = importDatasetInput ? importDatasetInput.value.trim() : "";
-        formData.append("dataset_name", datasetName || "rmanluo/RoG-webqsp");
+        const hfDataset = importDatasetInput ? importDatasetInput.value.trim() : "";
+        formData.append("dataset_name", hfDataset || "rmanluo/RoG-webqsp");
       } else {
-        const files = importFilesInput ? importFilesInput.files : null;
-        if (!files || !files.length) {
+        const zipFiles = importZipInput ? importZipInput.files : null;
+        const hasZip = zipFiles && zipFiles.length;
+        if (!hasZip) {
           if (importStatus) importStatus.textContent = "Select files to upload.";
           return;
         }
-        Array.from(files).forEach((file) => {
-          const relPath = file.webkitRelativePath || file.name;
-          formData.append("files", file, relPath);
-        });
+        if (hasZip) {
+          Array.from(zipFiles).forEach((file) => {
+            formData.append("files", file, file.name);
+          });
+        }
       }
 
       if (importStatus) importStatus.textContent = "Importing graph...";
       const submitBtn = document.getElementById("import-submit");
       if (submitBtn) submitBtn.disabled = true;
+      if (importProgressFill) importProgressFill.style.width = "0%";
+      if (importProgressLabel) importProgressLabel.textContent = "Uploading...";
 
       try {
-        const res = await fetch("/api/import", { method: "POST", body: formData });
-        const payload = await res.json();
-        if (!res.ok) {
-          throw new Error(payload.error || "Import failed.");
-        }
+        const payload = await new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open("POST", "/api/import");
+          xhr.upload.onprogress = (evt) => {
+            if (!evt.lengthComputable) return;
+            const percent = Math.max(0, Math.min(100, (evt.loaded / evt.total) * 100));
+            if (importProgressFill) importProgressFill.style.width = `${percent}%`;
+            if (importProgressLabel) importProgressLabel.textContent = `Uploading ${Math.round(percent)}%`;
+          };
+          xhr.onreadystatechange = () => {
+            if (xhr.readyState !== 4) return;
+            let body = {};
+            try {
+              body = JSON.parse(xhr.responseText || "{}");
+            } catch (_) { }
+            if (xhr.status >= 200 && xhr.status < 300) {
+              resolve(body);
+            } else {
+              reject(new Error(body.error || "Import failed."));
+            }
+          };
+          xhr.onerror = () => reject(new Error("Import failed."));
+          xhr.send(formData);
+        });
+
+        if (importProgressFill) importProgressFill.style.width = "100%";
+        if (importProgressLabel) importProgressLabel.textContent = "Import complete";
         if (importStatus) {
           importStatus.textContent = `Imported ${payload.label || payload.name}.`;
         }
@@ -1932,8 +2055,11 @@
         }
       } catch (err) {
         if (importStatus) importStatus.textContent = `Import failed: ${err.message}`;
+        if (importProgressLabel) importProgressLabel.textContent = "Import failed";
       } finally {
         if (submitBtn) submitBtn.disabled = false;
+        if (importProgressFill) importProgressFill.style.width = "0%";
+        if (importProgressLabel) importProgressLabel.textContent = "Import Graph";
       }
     };
   }

@@ -63,7 +63,7 @@ class GraphRAGPipeline:
             visualizer.update_session(
                 request.session_id,
                 metadata={"retrieval_elapsed_ms": round(retrieval_elapsed_ms, 2)},
-                progress={"current": 100, "total": 100, "message": "Generating answer"},
+                progress={"message": "Generating answer"},
             )
 
         generation_start = time.perf_counter()

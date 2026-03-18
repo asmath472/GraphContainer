@@ -28,7 +28,7 @@ class VectorRetriever(BaseRetriever):
         if visualizer is not None and session_id:
             visualizer.update_session(
                 session_id,
-                progress={"current": 0, "total": 100, "message": "Running vector retrieval"},
+                progress={"message": "Running vector retrieval"},
             )
 
         seed_ids: List[str] = []
@@ -74,25 +74,15 @@ class VectorRetriever(BaseRetriever):
             )
 
         if visualizer is not None and session_id:
-            visualizer.update_session(
+            visualizer.record(
                 session_id,
-                nodes=[
-                    {
-                        "id": sid,
-                        "style": {
-                            "color": {"background": "#ffeb3b", "border": "#f44336"},
-                            "borderWidth": 5,
-                        },
-                    }
-                    for sid in seed_ids
-                ],
-                progress={
-                    "current": 100,
-                    "total": 100,
-                    "message": f"Vector search done: {len(seed_ids)}",
+                seed_ids,
+                style={
+                    "color": {"background": "#ffeb3b", "border": "#f44336"},
+                    "borderWidth": 5,
                 },
+                message=f"Vector search done: {len(seed_ids)}",
             )
-
 
         context_chunks: List[str] = []
         retrieved_nodes: List[RetrievedNode] = []

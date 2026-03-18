@@ -53,8 +53,8 @@
             </div>
 
             <div id="sidepanel">
-                <h3>Node Intelligence</h3>
-                <pre id="node-detail" style="font-size: 11px;">Select a node to inspect its properties.</pre>
+                <h3>Details</h3>
+                <pre id="node-detail" style="font-size: 11px;">Select a node or edge to inspect its properties.</pre>
                 <div class="display-settings">
                     <div class="setting-item">
                         <span>Node Labels</span>
@@ -156,11 +156,20 @@
             <div class="import-shell">
                 <div class="import-card">
                     <h2>Import Graph</h2>
-                    <p class="import-subtitle">Upload graph files and register them for chat/debug.</p>
+                    <p class="import-subtitle">Upload your custom graph files and register them for chat/debug!</p>
                     <form id="import-form">
                         <label for="import-adapter">Graph Type</label>
+                        <div id="import-fastinsight-warning" class="import-info-note" role="status"
+                            aria-live="polite" aria-hidden="false">
+                            <span class="import-info-note-icon" aria-hidden="true">ℹ</span>
+                            <span id="import-fastinsight-warning-text">
+                                FastInsight graph type requires a dense vector index, which is not supported by this Import Mode. 
+                                Choose any other graph type for your custom import.
+                            </span>
+                        </div>
+
                         <select id="import-adapter" required>
-                            <option value="fastinsight">FastInsight</option>
+                            <option value="fastinsight" disabled>FastInsight (blocked)</option>
                             <option value="lightrag">LightRAG</option>
                             <option value="hipporag">HippoRAG</option>
                             <option value="g_retriever">G-Retriever (CSV)</option>
@@ -168,24 +177,27 @@
                             <option value="freebasekg">Freebase KG (HF)</option>
                         </select>
 
-                        <label for="import-label">Graph Label</label>
-                        <input id="import-label" type="text" placeholder="Optional display name" />
+                        <label for="import-dataset-name">Dataset Name</label>
+                        <input id="import-dataset-name" class="import-field" type="text" required
+                            placeholder="Dataset Name (Required)" />
 
                         <div id="import-file-group">
                             <label for="import-files">Graph Files</label>
-                            <input id="import-files" type="file" multiple webkitdirectory directory
-                                accept=".zip,.json,.jsonl,.csv,.tsv,.pickle,.parquet" />
+                            <input id="import-zip" class="import-field" type="file" accept=".zip" />
                             <div class="import-hint">
-                                Upload a folder (supported in Chromium) or a zip containing the graph files.
+                                Upload all of your necessary graph files for the graph type in .zip file.
                             </div>
                         </div>
 
                         <div id="import-dataset-group" class="hidden">
                             <label for="import-dataset">Hugging Face Dataset</label>
-                            <input id="import-dataset" type="text" value="rmanluo/RoG-webqsp" />
+                            <input id="import-dataset" class="import-field" type="text" value="rmanluo/RoG-webqsp" />
                         </div>
 
-                        <button id="import-submit" type="submit">Import Graph</button>
+                        <button id="import-submit" type="submit" class="import-progress" aria-live="polite">
+                            <span class="import-progress-fill" id="import-progress-fill"></span>
+                            <span class="import-progress-label" id="import-progress-label">Import Graph</span>
+                        </button>
                     </form>
                     <div id="import-status" class="import-status">Ready.</div>
                 </div>

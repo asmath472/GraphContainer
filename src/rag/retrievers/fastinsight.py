@@ -433,24 +433,14 @@ def _collecting_new(
             node["origin"] = "GS"
 
         if visualizer is not None and session_id:
-            node_id = _title_from_content(node, database_construction_method)
-            visualizer.update_session(
+            visualizer.record(
                 session_id,
-                nodes=[
-                    {
-                        "id": _title_from_content(node, database_construction_method),
-                        "style": {
-                            "color": {"background": "#c8e6c9", "border": "#4caf50"},
-                            "borderWidth": 3,
-                        },
-                    }
-                    for node in expanded_nodes
-                ],
-                progress={
-                    "current": len(retrieved_nodes) + len(expanded_nodes),
-                    "total": max_reranking + 10,
-                    "message": f"Collecting node: {node_id}",
+                [_title_from_content(node, database_construction_method) for node in expanded_nodes],
+                style={
+                    "color": {"background": "#c8e6c9", "border": "#4caf50"},
+                    "borderWidth": 3,
                 },
+                message=f"Collecting nodes: {len(expanded_nodes)}",
             )
 
         retrieved_nodes.extend(expanded_nodes)
@@ -555,7 +545,7 @@ class FastInsightRetriever(BaseRetriever):
         if visualizer is not None and session_id:
             visualizer.update_session(
                 session_id,
-                progress={"current": 0, "total": 100, "message": "Running fastinsight retrieval"},
+                progress={"message": "Running fastinsight retrieval"},
             )
 
         seed_top_k = int(kwargs.pop("seed_top_k", 10))
@@ -615,19 +605,14 @@ class FastInsightRetriever(BaseRetriever):
         )
 
         if visualizer is not None and session_id:
-            visualizer.update_session(
+            visualizer.record(
                 session_id,
-                nodes=[
-                    {
-                        "id": seed_id,
-                        "style": {
-                            "color": {"background": "#bbdefb", "border": "#1565c0"},
-                            "borderWidth": 4,
-                        },
-                    }
-                    for seed_id in seed_ids
-                ],
-                progress={"current": len(seed_ids), "total": 110, "message": f"Seed nodes found: {len(seed_ids)}"},
+                seed_ids,
+                style={
+                    "color": {"background": "#bbdefb", "border": "#1565c0"},
+                    "borderWidth": 4,
+                },
+                message=f"Seed nodes found: {len(seed_ids)}",
             )
 
         ranker = self._ensure_granker(gpu_id=gpu_id, granker=granker, verbose=verbose)
@@ -688,19 +673,14 @@ class FastInsightRetriever(BaseRetriever):
 
         highlight_node_ids = dedup_preserve_order(node.id for node in retrieved_nodes[:10])
         if visualizer is not None and session_id:
-            visualizer.update_session(
+            visualizer.record(
                 session_id,
-                nodes=[
-                    {
-                        "id": node_id,
-                        "style": {
-                            "color": {"background": "#fff176", "border": "#d84315"},
-                            "borderWidth": 7,
-                        },
-                    }
-                    for node_id in highlight_node_ids
-                ],
-                progress={"current": 110, "total": 110, "message": "FastInsight retrieval complete"},
+                highlight_node_ids,
+                style={
+                    "color": {"background": "#fff176", "border": "#d84315"},
+                    "borderWidth": 7,
+                },
+                message="FastInsight retrieval complete",
             )
 
         origin_stats: Dict[str, int] = {}
