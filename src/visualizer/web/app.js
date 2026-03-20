@@ -52,6 +52,7 @@
   const importDatasetGroup = document.getElementById("import-dataset-group");
   const importStatus = document.getElementById("import-status");
   const importFastInsightWarning = document.getElementById("import-fastinsight-warning");
+  const importFileRequirements = document.getElementById("import-file-requirements");
   const importProgressFill = document.getElementById("import-progress-fill");
   const importProgressLabel = document.getElementById("import-progress-label");
 
@@ -430,11 +431,32 @@
     const nextEdgeIdSet = new Set(nextEdges.map((edge) => edge.id));
     const currentPositions = currentNodeIds.length ? network.getPositions(currentNodeIds) : {};
 
+    let anchorX = 0;
+    let anchorY = 0;
+    let anchorCount = 0;
+    for (const pos of Object.values(currentPositions)) {
+      if (!pos) continue;
+      if (!Number.isFinite(pos.x) || !Number.isFinite(pos.y)) continue;
+      anchorX += pos.x;
+      anchorY += pos.y;
+      anchorCount += 1;
+    }
+    const anchor =
+      anchorCount > 0 ? { x: anchorX / anchorCount, y: anchorY / anchorCount } : null;
+
     const patchedNodes = nextNodes.map((node) => {
-      if (currentNodeIdSet.has(node.id) && currentPositions[node.id]) {
+      const knownPos = currentPositions[node.id];
+      if (knownPos && Number.isFinite(knownPos.x) && Number.isFinite(knownPos.y)) {
         return styleNodeByRetrieval(node, {
-          x: currentPositions[node.id].x,
-          y: currentPositions[node.id].y,
+          x: knownPos.x,
+          y: knownPos.y,
+          physics: false,
+        });
+      }
+      if (anchor) {
+        return styleNodeByRetrieval(node, {
+          x: anchor.x,
+          y: anchor.y,
           physics: true,
         });
       }
@@ -448,7 +470,14 @@
 
     if (patchedNodes.length) nodes.update(patchedNodes);
     if (nextEdges.length) edges.update(nextEdges);
-    restartPhysics();
+
+    const hasNewNode = patchedNodes.some((node) => !currentNodeIdSet.has(node.id));
+    const hasRemovedNode = removedNodeIds.length > 0;
+    const hasRemovedEdge = removedEdgeIds.length > 0;
+    const hasNewEdge = nextEdges.some((edge) => !currentEdgeIds.includes(edge.id));
+    if (hasNewNode || hasRemovedNode || hasRemovedEdge || hasNewEdge) {
+      restartPhysics();
+    }
   }
 
   async function fetchSessionSubgraph(sessionId, customHops = hops) {
@@ -480,9 +509,8 @@
     const p = progress || {};
     const step = getProgressStep(p);
     progressFill.style.width = step > 0 ? "100%" : "0%";
-    progressText.innerHTML = `<span style="color:var(--accent-color); font-weight:bold;">Step ${
-      step || 0
-    }</span> - ${p.message || "Processing"}`;
+    progressText.innerHTML = `<span style="color:var(--accent-color); font-weight:bold;">Step ${step || 0
+      }</span> - ${p.message || "Processing"}`;
   }
 
   function cloneReplayView(view) {
@@ -627,7 +655,7 @@
     const entry = history[safeIndex];
     if (!entry || !entry.view) return;
 
-    applySubgraph(entry.view, { incremental: false });
+    applySubgraph(entry.view, { incremental: true });
     applyGhostStyleToVisibleNodes();
     updateProgressBar(entry.view.progress);
 
@@ -1173,21 +1201,21 @@
     if (!chatRetrievalWarning || !chatRetrievalWarningText) return;
     const targetSession = session || getActiveChatSession();
     const retrieval = String(
-      (targetSession && targetSession.retrieval) ||
       (chatRetrievalSelect && chatRetrievalSelect.value) ||
+      (targetSession && targetSession.retrieval) ||
       ""
     )
       .trim()
       .toLowerCase();
     const graphName = String(
-      (targetSession && targetSession.graph) ||
       (chatGraphSelect && chatGraphSelect.value) ||
+      (targetSession && targetSession.graph) ||
       ""
     ).trim();
     const capability = graphCapabilitiesByName.get(graphName) || null;
     const shouldWarn =
       retrieval === "fastinsight" &&
-      (!capability || capability.graphType !== "fastinsight" || !capability.hasNodeVectorIndex);
+      (!capability || !capability.hasNodeVectorIndex);
 
     if (!shouldWarn) {
       chatRetrievalWarning.classList.add("hidden");
@@ -1196,7 +1224,7 @@
     }
 
     chatRetrievalWarningText.textContent =
-      "FastInsight requires a dense vector index (`node_vector`). This graph does not provide one. Choose One-Hop/Vector, or switch to a graph with a dense index.";
+      "Component graph requires a dense vector index (`node_vector`). This graph does not provide one. Choose One-Hop/Vector, or switch to a graph with a dense index.";
     chatRetrievalWarning.classList.remove("hidden");
     chatRetrievalWarning.setAttribute("aria-hidden", "false");
   }
@@ -1417,7 +1445,7 @@
       title: "New Graph Chat",
       graph: (chatGraphSelect && chatGraphSelect.value) || "default",
       model: (chatModelSelect && chatModelSelect.value) || "gpt-5-nano",
-      embedding: (chatEmbeddingSelect && chatEmbeddingSelect.value) || "bge:BAAI/bge-m3",
+      embedding: (chatEmbeddingSelect && chatEmbeddingSelect.value) || "openai:text-embedding-3-small",
       retrieval: (chatRetrievalSelect && chatRetrievalSelect.value) || "one-hop",
       updatedAt: Date.now(),
       messages: [],
@@ -1744,6 +1772,7 @@
       chatGraphSelect.onchange = async () => {
         const name = chatGraphSelect.value;
         updateActiveChatSetting("graph", name);
+        updateFastInsightWarning();
         // Tell the server to switch the active graph (topology + RAG backend)
         try {
           await fetch("/api/graph/switch", {
@@ -1764,8 +1793,10 @@
         updateActiveChatSetting("embedding", chatEmbeddingSelect.value);
     }
     if (chatRetrievalSelect) {
-      chatRetrievalSelect.onchange = () =>
+      chatRetrievalSelect.onchange = () => {
         updateActiveChatSetting("retrieval", chatRetrievalSelect.value);
+        updateFastInsightWarning();
+      };
     }
 
     if (chatSendBtn) {
@@ -1955,12 +1986,25 @@
     modeImportBtn.onclick = () => setMode("import");
   }
 
+  const importRequirementsByAdapter = {
+    lightrag: "Required: vdb_entities.json, vdb_relationships.json",
+    hipporag: "Required: graph.pickle · entity_embeddings/vdb_entity.parquet · chunk_embeddings/vdb_chunk.parquet · fact_embeddings/vdb_fact.parquet · openie_results_ner_*.json (in parent directory)",
+    g_retriever: "Required: nodes/{i}.csv · edges/{i}.csv · graphs/{i}.pt",
+    expla_graphs: "Required: a .tsv file",
+    freebasekg: "Required: Hugging Face dataset name",
+    fastinsight: "Required: nodes.jsonl, edges.jsonl (blocked in import mode)",
+  };
+
+
   function updateImportVisibility() {
     if (!importAdapterSelect || !importFileGroup || !importDatasetGroup) return;
     const adapter = importAdapterSelect.value;
     const isFreebase = adapter === "freebasekg";
     importFileGroup.classList.toggle("hidden", isFreebase);
     importDatasetGroup.classList.toggle("hidden", !isFreebase);
+    if (importFileRequirements) {
+      importFileRequirements.textContent = importRequirementsByAdapter[adapter] + "\nUpload all of your necessary graph files for the graph type in .zip file.";
+    }
     if (importFastInsightWarning) {
       importFastInsightWarning.classList.remove("hidden");
       importFastInsightWarning.setAttribute("aria-hidden", "false");
@@ -1985,14 +2029,12 @@
       if (adapter === "fastinsight") {
         if (importStatus) {
           importStatus.textContent =
-            "FastInsight requires a dense vector index (`node_vector`). This graph does not provide one. Choose One-Hop/Vector, or switch to a graph with a dense index.";
+            "Component graph requires a dense vector index (`node_vector`). This graph does not provide one. Choose One-Hop/Vector, or switch to a graph with a dense index.";
         }
         return;
       }
-      const label = `${adapter}:${datasetName}`;
       const formData = new FormData();
       formData.append("adapter", adapter);
-      formData.append("label", label);
       formData.append("dataset_name", datasetName);
 
       if (adapter === "freebasekg") {
@@ -2071,7 +2113,7 @@
       if (!history.length) return;
       const targetIndex = Math.max(0, Math.min(history.length - 1, Number(replaySlider.value || 0)));
       if (targetIndex >= history.length - 1) {
-        showLatestReplay(currentSession, { incremental: false });
+        showLatestReplay(currentSession, { incremental: true });
         return;
       }
       replayCursorBySession.set(currentSession, targetIndex);
@@ -2082,7 +2124,7 @@
   if (replayLiveBtn) {
     replayLiveBtn.onclick = () => {
       if (!currentSession) return;
-      showLatestReplay(currentSession, { incremental: false });
+      showLatestReplay(currentSession, { incremental: true });
     };
   }
 

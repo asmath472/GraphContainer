@@ -23,6 +23,10 @@ class GraphAdapter(ABC):
         self.version = version
 
     @abstractmethod
+    def can_import(self, source: Any) -> bool:
+        """Return True if this adapter can import the given source."""
+
+    @abstractmethod
     def import_graph(
         self,
         source: Any,
