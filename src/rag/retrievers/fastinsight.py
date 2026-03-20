@@ -385,6 +385,7 @@ def _collecting_new(
     retrieved_nodes.sort(key=_score_of, reverse=True)
 
     while True:
+        # breakpoint()
         if len(retrieved_nodes) >= max_reranking:
             break
 

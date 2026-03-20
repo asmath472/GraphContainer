@@ -163,18 +163,17 @@
                             aria-live="polite" aria-hidden="false">
                             <span class="import-info-note-icon" aria-hidden="true">ℹ</span>
                             <span id="import-fastinsight-warning-text">
-                                FastInsight graph type requires a dense vector index, which is not supported by this Import Mode. 
+                                Component graph type requires a dense vector index, which is not supported by this Import Mode. 
                                 Choose any other graph type for your custom import.
                             </span>
                         </div>
 
                         <select id="import-adapter" required>
-                            <option value="fastinsight" disabled>FastInsight (blocked)</option>
-                            <option value="lightrag">LightRAG</option>
-                            <option value="hipporag">HippoRAG</option>
-                            <option value="g_retriever">G-Retriever (CSV)</option>
-                            <option value="expla_graphs">Expla Graphs (TSV)</option>
-                            <option value="freebasekg">Freebase KG (HF)</option>
+                            <option value="fastinsight" disabled>Component (blocked)</option>
+                            <option value="lightrag">Attribute Bundle</option>
+                            <option value="hipporag">Topology-Semantic</option>
+                            <option value="g_retriever">Subgraph Union</option>
+                            <option value="expla_graphs">Triplet Sequence</option>
                         </select>
 
                         <label for="import-dataset-name">Dataset Name</label>

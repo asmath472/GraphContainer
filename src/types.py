@@ -12,6 +12,6 @@ class NodeRecord(BaseModel):
 class EdgeRecord(BaseModel):
     source: str
     target: str
-    relation: str = "RELATED"
+    relation: str = ""
     weight: float = 1.0
     metadata: Dict[str, Any] = Field(default_factory=dict)
