@@ -124,7 +124,7 @@ body {
   z-index: 300;
   display: inline-flex;
   gap: 8px;
-  padding: 6px;
+  padding: 8px;
   border-radius: 999px;
   border: 1px solid var(--border-strong);
   background: var(--panel-bg);
@@ -135,10 +135,10 @@ body {
 .mode-btn {
   border: none;
   border-radius: 999px;
-  padding: 8px 16px;
+  padding: 10px 18px;
   color: var(--text-dim);
   background: transparent;
-  font-size: 13px;
+  font-size: 16px;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.2s ease, color 0.2s ease;
@@ -178,15 +178,18 @@ body {
   backdrop-filter: blur(12px);
 }
 
-.import-card h2 {
+.import-card h2,
+.import-card h3 {
   margin: 0 0 6px;
-  font-size: 22px;
+  font-size: 30px;
+  line-height: 1.2;
 }
 
 .import-subtitle {
   margin: 0 0 18px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 16px;
+  line-height: 1.5;
 }
 
 #import-form {
@@ -195,7 +198,8 @@ body {
 }
 
 #import-form label {
-  font-size: 12px;
+  font-size: 16px;
+  font-weight: 600;
   color: var(--text-dim);
 }
 
@@ -207,7 +211,8 @@ body {
   border: 1px solid var(--border-color);
   background: var(--input-bg);
   color: var(--text-main);
-  font-size: 12px;
+  font-size: 16px;
+  line-height: 1.4;
 }
 
 .import-field {
@@ -228,9 +233,10 @@ body {
 }
 
 .import-hint {
-  font-size: 11px;
+  font-size: 14px;
   color: var(--text-muted);
   margin-top: 6px;
+  line-height: 1.5;
 }
 
 .import-checkbox {
@@ -248,12 +254,13 @@ body {
 .import-progress {
   position: relative;
   margin-top: 6px;
-  padding: 10px 14px;
+  padding: 14px 18px;
   border-radius: 10px;
   border: none;
   background: linear-gradient(120deg, var(--accent-color), var(--accent-color-2));
   color: var(--text-inverse);
-  font-size: 13px;
+  font-size: 17px;
+  font-weight: 700;
   cursor: pointer;
   overflow: hidden;
   text-align: center;
@@ -281,7 +288,8 @@ body {
 
 .import-status {
   margin-top: 14px;
-  font-size: 12px;
+  font-size: 16px;
+  line-height: 1.5;
   color: var(--text-dim);
 }
 
@@ -289,7 +297,7 @@ body {
   display: none !important;
 }
 
-.import-info-note {
+/* .import-info-note {
   display: flex;
   align-items: flex-start;
   gap: 8px;
@@ -307,9 +315,9 @@ body {
   font-size: 13px;
   line-height: 1.4;
   color: #34d399;
-}
+} */
 
-:root[data-theme="light"] .import-info-note {
+/* :root[data-theme="light"] .import-info-note {
   color: #166534;
   background: rgba(34, 197, 94, 0.12);
   border-color: rgba(22, 101, 52, 0.35);
@@ -317,7 +325,7 @@ body {
 
 :root[data-theme="light"] .import-info-note-icon {
   color: #16a34a;
-}
+} */
 
 #theme-toggle {
   position: fixed;
@@ -364,7 +372,7 @@ body {
 }
 
 #debug-view .title {
-  font-size: 0.9rem;
+  font-size: 1.15rem;
   font-weight: 600;
   letter-spacing: -0.025em;
   margin-bottom: 16px;
@@ -393,8 +401,9 @@ body {
   background: var(--input-bg);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  padding: 8px 12px;
+  padding: 10px 14px;
   color: var(--text-main);
+  font-size: 15px;
   outline: none;
   transition: 0.2s;
 }
@@ -413,7 +422,8 @@ body {
   color: var(--text-inverse);
   border: none;
   border-radius: 8px;
-  padding: 8px 16px;
+  padding: 10px 16px;
+  font-size: 15px;
   font-weight: 500;
   cursor: pointer;
   transition: 0.2s;
@@ -438,6 +448,14 @@ body {
   margin-top: 15px;
 }
 
+#progress-text {
+  font-size: 15px;
+}
+
+#session-status {
+  font-size: 14px;
+}
+
 .replay-controls {
   margin-top: 12px;
   border-top: 1px solid var(--border-color);
@@ -452,7 +470,7 @@ body {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 6px;
-  font-size: 11px;
+  font-size: 15px;
   color: var(--text-dim);
   font-weight: 600;
 }
@@ -462,8 +480,8 @@ body {
   border: 1px solid var(--border-color) !important;
   color: var(--text-main) !important;
   border-radius: 8px;
-  padding: 4px 8px !important;
-  font-size: 11px;
+  padding: 6px 10px !important;
+  font-size: 14px;
   line-height: 1.1;
 }
 
@@ -481,7 +499,7 @@ body {
 }
 
 #debug-replay-status {
-  font-size: 10px;
+  font-size: 14px;
   color: var(--text-dim);
   line-height: 1.35;
 }
@@ -558,7 +576,7 @@ body {
 }
 
 #debug-view h3 {
-  font-size: 1rem;
+  font-size: 1.35rem;
   margin-top: 0;
   color: var(--text-main);
 }
@@ -568,7 +586,8 @@ body {
   border-radius: 12px;
   padding: 15px;
   font-family: "Fira Code", monospace;
-  font-size: 13px;
+  font-size: 15px;
+  line-height: 1.5;
   color: var(--code-text);
   border: 1px solid var(--border-color);
   white-space: pre-wrap;
@@ -586,7 +605,7 @@ body {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 12px;
-  font-size: 13px;
+  font-size: 15px;
   color: var(--text-dim);
 }
 
@@ -684,7 +703,7 @@ body {
 }
 
 .chat-sidebar-title {
-  font-size: 15px;
+  font-size: 18px;
   font-weight: 700;
 }
 
@@ -693,9 +712,9 @@ body {
   background: var(--input-bg);
   color: var(--text-main);
   border-radius: 10px;
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 700;
-  padding: 7px 10px;
+  padding: 9px 12px;
   cursor: pointer;
 }
 
@@ -744,7 +763,7 @@ body {
 }
 
 .chat-session-title {
-  font-size: 12px;
+  font-size: 15px;
   font-weight: 700;
   white-space: nowrap;
   overflow: hidden;
@@ -753,7 +772,7 @@ body {
 }
 
 .chat-session-preview {
-  font-size: 10px;
+  font-size: 13px;
   color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
@@ -769,7 +788,7 @@ body {
   margin-right: 6px;
   border-radius: 8px;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1;
 }
 
@@ -818,10 +837,10 @@ body {
   min-width: 170px;
   border: 1px solid var(--border-color);
   border-radius: 10px;
-  padding: 8px 10px;
+  padding: 10px 12px;
   background: var(--input-bg);
   color: var(--text-main);
-  font-size: 12px;
+  font-size: 14px;
   font-family: inherit;
   outline: none;
 }
@@ -841,14 +860,14 @@ body {
   border-radius: 10px;
   background: rgba(245, 158, 11, 0.12);
   color: var(--text-main);
-  font-size: 11px;
+  font-size: 14px;
   line-height: 1.35;
   box-sizing: border-box;
 }
 
 .chat-retrieval-warning-icon {
   color: #f59e0b;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1;
   margin-top: 1px;
 }
@@ -856,7 +875,7 @@ body {
 #chat-title {
   margin: 0;
   margin-left: -4px;
-  font-size: 20px;
+  font-size: 24px;
   line-height: 1.15;
   min-width: 0;
   padding: 2px 6px;
@@ -875,7 +894,7 @@ body {
 }
 
 .chat-subtitle {
-  font-size: 11px;
+  font-size: 14px;
   color: var(--text-dim);
 }
 
@@ -890,7 +909,7 @@ body {
   padding: 12px 14px;
   border-radius: 14px;
   line-height: 1.45;
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .msg.msg-retrieval {
@@ -899,7 +918,7 @@ body {
 }
 
 .msg-role {
-  font-size: 10px;
+  font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-weight: 700;
@@ -928,7 +947,7 @@ body {
   background: rgba(148, 163, 184, 0.1);
   color: #9ca3af;
   font-family: "Orbitron", "Fira Code", monospace;
-  font-size: 10px;
+  font-size: 12px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   display: inline-flex;
@@ -1002,7 +1021,7 @@ body {
 .msg-mini-session-id {
   grid-area: session;
   margin-top: 6px;
-  font-size: 10px;
+  font-size: 12px;
   font-family: "Fira Code", monospace;
   color: var(--text-dim);
   word-break: break-all;
@@ -1011,7 +1030,7 @@ body {
 .msg-mini-session-node-detail {
   grid-area: detail;
   margin: 0;
-  font-size: 11px;
+  font-size: 13px;
   line-height: 1.4;
   font-family: "Fira Code", monospace;
   color: var(--chat-assistant-text);
@@ -1060,7 +1079,7 @@ body {
   border-radius: 12px;
   padding: 12px 14px;
   font-family: inherit;
-  font-size: 13px;
+  font-size: 15px;
   outline: none;
   color: var(--text-main);
   background: var(--input-bg);
@@ -1083,6 +1102,7 @@ body {
   min-height: 52px;
   background: linear-gradient(135deg, var(--accent-color), var(--accent-color-2));
   color: var(--text-inverse);
+  font-size: 15px;
   font-weight: 700;
   cursor: pointer;
 }
@@ -1160,11 +1180,158 @@ body {
   }
 
   #chat-title {
-    font-size: 18px;
+    font-size: 21px;
   }
 
   #theme-toggle {
     left: 16px;
     bottom: 16px;
+  }
+}
+
+@media print {
+  /* 1. Force exact colors and landscape mode */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
+  }
+
+  @page {
+    margin: 0mm !important;
+  }
+
+  /* 2. Reset the canvas completely */
+  html, body, #app-shell, .mode-view.active {
+    width: 100% !important;
+    max-width: 100vw !important;
+    height: 100vh !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    background-color: var(--bg-main) !important;
+    position: relative !important;
+  }
+
+  /* =========================================================
+     3. IMPORT MODE FIX: Bulletproof Mathematical Centering
+     ========================================================= */
+  .import-shell {
+    display: block !important; /* Ditch grid/flex to stop print engine bugs */
+    width: 75% !important;
+    height: 100vh !important;
+    padding: 0 !important; /* Kills the 80px top padding causing the downward shift */
+    margin: 0 auto !important;
+    position: relative !important;
+    box-sizing: border-box !important;
+  }
+
+  .import-card {
+    position: absolute !important;
+    top: 50% !important;
+    left: 50% !important;
+    transform: translate(-50%, -50%) !important; /* Mathematically pins it to the exact center */
+    
+    width: 80% !important; /* Gives it breathing room on the paper */
+    max-width: 650px !important;
+    margin: 0 !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  /* =========================================================
+     4. CHAT MODE FIX: (Unchanged - Working perfectly)
+     ========================================================= */
+  /* .chat-shell {
+    display: grid !important;
+    grid-template-columns: 220px minmax(0, 1fr) !important;
+    grid-template-rows: 1fr !important;
+    width: 100% !important;
+    height: 100vh !important;
+    padding: 86px 22px 22px !important;
+    gap: 6px !important;
+    box-sizing: border-box !important;
+  } */
+  
+  .chat-shell {
+    display: block;
+    width: 100%;
+    height: auto;
+    padding: 86px 22px 22px;
+  }
+
+  .chat-sidebar {
+    display: none;
+  }
+
+  /* .chat-main {
+    width: 100%;
+    max-width: none;
+    height: auto;
+    margin: 0;
+  } */
+
+  .chat-main {
+    order: 0 !important;
+    width: 100% !important;
+    min-width: 0;
+    height: calc(100vh - 108px) !important;
+    max-height: calc(100vh - 108px) !important;
+    display: grid !important;
+    grid-template-rows: auto 1fr auto !important;
+  }
+
+  .chat-header-controls {
+    width: auto !important;
+    justify-content: flex-end !important;
+  }
+  
+  .chat-header-controls select {
+    flex: unset !important;
+    min-width: 170px !important;
+  }
+
+  .chat-thread {
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  .chat-input-wrap {
+    align-self: end;
+  }
+
+  /* =========================================================
+     5. FLOATING ELEMENTS: Keep top switcher centered
+     ========================================================= */
+  ::-webkit-scrollbar {
+    display: none !important;
+  }
+  
+  #mode-switcher {
+    position: absolute !important;
+    top: 20px !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    width: max-content !important;
+  }
+
+  #theme-toggle {
+    position: absolute !important;
+  }
+
+  #network canvas, 
+  #network svg,
+  .msg-mini-session-graph canvas,
+  .msg-mini-session-graph svg {
+    width: 100% !important;
+    height: 100% !important;
+    /* This forces the graph to maintain its true shape (perfect circles) 
+       and act like a background image instead of a stretched rubber band */
+    object-fit: cover !important; 
+  }
+  
+  /* Fallback if the nodes are rendered as pure HTML div elements */
+  .node, [class*="node"] {
+    aspect-ratio: 1 / 1 !important;
   }
 }

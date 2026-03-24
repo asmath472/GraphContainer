@@ -1016,9 +1016,12 @@ class LiveGraphVisualizer:
                                     zf.extractall(temp_dir)
                                 zip_path.unlink(missing_ok=True)
 
-                            children = [p for p in temp_dir.iterdir() if p.name != ".DS_Store"]
-                            if len(children) == 1 and children[0].is_dir():
-                                source_path = children[0]
+                            while True:
+                                children = [p for p in source_path.iterdir() if p.name not in (".DS_Store", "__MACOSX")]
+                                if len(children) == 1 and children[0].is_dir():
+                                    source_path = children[0]
+                                else:
+                                    break
 
                         if adapter_key == "hipporag":
                             resolved_root, error = _resolve_hipporag_root(source_path)
