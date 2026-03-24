@@ -257,6 +257,7 @@ def main() -> None:
         output_root = output_root_arg
     else:
         output_root = (PROJECT_ROOT / output_root_arg).resolve()
+    output_root = output_root / args.dataset
     output_root.mkdir(parents=True, exist_ok=True)
 
     graphs = get_graphs()
