@@ -475,7 +475,8 @@ body {
   font-weight: 600;
 }
 
-#debug-replay-live {
+#debug-replay-live,
+#debug-physics-toggle {
   background: transparent !important;
   border: 1px solid var(--border-color) !important;
   color: var(--text-main) !important;
@@ -485,8 +486,13 @@ body {
   line-height: 1.1;
 }
 
-#debug-replay-live:hover {
+#debug-replay-live:hover,
+#debug-physics-toggle:hover {
   border-color: var(--accent-color) !important;
+}
+
+#debug-physics-toggle {
+  margin-left: 8px;
 }
 
 #debug-replay-slider {

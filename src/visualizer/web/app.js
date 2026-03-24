@@ -27,6 +27,7 @@
   const replaySlider = document.getElementById("debug-replay-slider");
   const replayLiveBtn = document.getElementById("debug-replay-live");
   const replayStatusEl = document.getElementById("debug-replay-status");
+  const replayPhysicsBtn = document.getElementById("debug-physics-toggle");
 
   const chatGraphSelect = document.getElementById("chat-graph-select");
   const chatModelSelect = document.getElementById("chat-model-select");
@@ -235,6 +236,7 @@
   const sessionReplayHistory = new Map();
   const replayCursorBySession = new Map();
   let chatMessageSeq = 0;
+  let physicsEnabled = true;
 
   function getCssVar(name, fallback = "") {
     const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -370,7 +372,11 @@
   }
 
   function clearGraph() {
-    network.setOptions({ physics: { enabled: true } });
+    network.setOptions({
+      physics: {
+        enabled: physicsEnabled,
+      },
+    });
     nodes.clear();
     edges.clear();
   }
@@ -396,12 +402,35 @@
   function restartPhysics() {
     network.setOptions({
       physics: {
-        enabled: true,
+        enabled: physicsEnabled,
       },
     });
+    if (!physicsEnabled) return;
     if (typeof network.startSimulation === "function") {
       network.startSimulation();
     }
+  }
+
+  function setPhysicsEnabled(nextEnabled) {
+    physicsEnabled = Boolean(nextEnabled);
+    network.setOptions({
+      physics: {
+        enabled: physicsEnabled,
+      },
+    });
+
+    if (physicsEnabled) {
+      if (typeof network.startSimulation === "function") {
+        network.startSimulation();
+      }
+    } else if (typeof network.stopSimulation === "function") {
+      network.stopSimulation();
+    }
+
+    if (replayPhysicsBtn) {
+      replayPhysicsBtn.textContent = physicsEnabled ? "Pause Physics" : "Resume Physics";
+    }
+    network.redraw();
   }
 
   function applySubgraph(payload, { incremental = false } = {}) {
@@ -414,7 +443,7 @@
         nodes.add(
           nextNodes.map((node) =>
             styleNodeByRetrieval(node, {
-              physics: true,
+              physics: physicsEnabled,
             })
           )
         );
@@ -450,17 +479,17 @@
         return styleNodeByRetrieval(node, {
           x: knownPos.x,
           y: knownPos.y,
-          physics: false,
+          physics: physicsEnabled,
         });
       }
       if (anchor) {
         return styleNodeByRetrieval(node, {
           x: anchor.x,
           y: anchor.y,
-          physics: true,
+          physics: physicsEnabled,
         });
       }
-      return styleNodeByRetrieval(node, { physics: true });
+      return styleNodeByRetrieval(node, { physics: physicsEnabled });
     });
 
     const removedNodeIds = currentNodeIds.filter((id) => !nextNodeIdSet.has(id));
@@ -549,6 +578,7 @@
       replaySlider.max = "0";
       replaySlider.value = "0";
       if (replayLiveBtn) replayLiveBtn.disabled = true;
+      if (replayPhysicsBtn) replayPhysicsBtn.disabled = true;
       setReplayStatusText("No replay snapshots");
       return;
     }
@@ -560,6 +590,7 @@
       replaySlider.max = "0";
       replaySlider.value = "0";
       if (replayLiveBtn) replayLiveBtn.disabled = true;
+      if (replayPhysicsBtn) replayPhysicsBtn.disabled = true;
       setReplayStatusText("No replay snapshots");
       return;
     }
@@ -588,6 +619,7 @@
     replaySlider.max = String(maxIndex);
     replaySlider.value = String(effectiveIndex);
     if (replayLiveBtn) replayLiveBtn.disabled = cursor === null;
+    if (replayPhysicsBtn) replayPhysicsBtn.disabled = false;
 
     setReplayStatusText(
       `${mode} ${effectiveIndex + 1}/${history.length} · Step ${step} · ${message}`
@@ -2121,6 +2153,47 @@
     });
   }
 
+  function seekReplayStep(delta) {
+    if (!currentSession) return;
+    const history = getReplayHistory(currentSession);
+    if (!history.length || history.length <= 1) return;
+
+    const maxIndex = history.length - 1;
+    const cursor = getReplayCursor(currentSession);
+    let currentIndex = cursor === null ? maxIndex : Number(cursor);
+    if (!Number.isFinite(currentIndex)) currentIndex = maxIndex;
+    currentIndex = Math.max(0, Math.min(maxIndex, Math.trunc(currentIndex)));
+
+    const nextIndex = currentIndex + Number(delta);
+    if (nextIndex <= 0) {
+      replayCursorBySession.set(currentSession, 0);
+      applyReplayEntry(currentSession, 0);
+      return;
+    }
+
+    if (nextIndex >= maxIndex) {
+      replayCursorBySession.delete(currentSession);
+      showLatestReplay(currentSession, { incremental: true });
+      return;
+    }
+
+    replayCursorBySession.set(currentSession, nextIndex);
+    applyReplayEntry(currentSession, nextIndex);
+  }
+
+  document.addEventListener("keydown", (event) => {
+    if (currentMode !== "debug") return;
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    const active = document.activeElement;
+    if (active && ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName)) return;
+    if (active && active.isContentEditable) return;
+    if (event.isComposing) return;
+
+    event.preventDefault();
+    const delta = event.key === "ArrowLeft" ? -1 : 1;
+    seekReplayStep(delta);
+  });
+
   if (replayLiveBtn) {
     replayLiveBtn.onclick = () => {
       if (!currentSession) return;
@@ -2128,8 +2201,15 @@
     };
   }
 
+  if (replayPhysicsBtn) {
+    replayPhysicsBtn.onclick = () => {
+      setPhysicsEnabled(!physicsEnabled);
+    };
+  }
+
   initTheme();
   initChatUi();
+  setPhysicsEnabled(true);
   clearGraph();
   syncReplayControls("");
   setMode("chat");
