@@ -8,7 +8,7 @@
 
 A demonstration video is available at our Youtube demonstration: 
 <a href="https://www.youtube.com/watch?v=OnaRT_icNM0" target="_blank">
-  <img src="https://img.shields.io/badge/YouTube-Demo-red?logo=youtube" alt="YouTube" height="18" style="vertical-align: middle;">
+  <img src="https://img.shields.io/badge/YouTube-Demo-red?logo=youtube" alt="YouTube" height="20" style="vertical-align: middle;">
 </a>
 
 
