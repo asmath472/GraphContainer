@@ -4,7 +4,7 @@
   <img src="graph-container-workflow.jpg" alt="GraphContainer workflow" width="760">
 </p>
 
-**GraphContainer** provides a unified workflow for working with Graph-RAG systems. It is designed to load graphs produced by different methods, convert them into a shared internal representation, run retrieval pipelines on top of that representation, visualize retrieval traces in a browser, and execute experiments through a consistent interface.
+**GraphContainer** provides a unified workflow for working with Graph RAG systems. It is designed to load graphs produced by different methods, convert them into a shared internal representation, run retrieval pipelines on top of that representation, visualize retrieval traces in a browser, and execute experiments through a consistent interface.
 
 [![YouTube Demo](https://img.shields.io/badge/YouTube-Demo-red?style=for-the-badge&logo=youtube&logoColor=white)](https://www.youtube.com/watch?v=OnaRT_icNM0)
 
