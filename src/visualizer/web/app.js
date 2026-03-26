@@ -43,6 +43,23 @@
   const chatInput = document.getElementById("chat-input");
   const chatSendBtn = document.getElementById("chat-send");
   const graphCapabilitiesByName = new Map();
+  const GRAPH_TYPE_ALIASES = Object.freeze({
+    component: "component_graph",
+    component_graph: "component_graph",
+    fastinsight: "component_graph",
+    attribute_bundle: "attribute_bundle_graph",
+    attribute_bundle_graph: "attribute_bundle_graph",
+    lightrag: "attribute_bundle_graph",
+    topology_semantic: "topology_semantic_graph",
+    topology_semantic_graph: "topology_semantic_graph",
+    hipporag: "topology_semantic_graph",
+    subgraph_union: "subgraph_union_graph",
+    subgraph_union_graph: "subgraph_union_graph",
+    g_retriever: "subgraph_union_graph",
+    expla_graphs: "expla_graphs",
+    freebasekg: "freebasekg",
+    tog: "tog",
+  });
 
   const importForm = document.getElementById("import-form");
   const importAdapterSelect = document.getElementById("import-adapter");
@@ -56,6 +73,11 @@
   const importFileRequirements = document.getElementById("import-file-requirements");
   const importProgressFill = document.getElementById("import-progress-fill");
   const importProgressLabel = document.getElementById("import-progress-label");
+
+  function normalizeGraphTypeKey(rawValue) {
+    const key = String(rawValue || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+    return GRAPH_TYPE_ALIASES[key] || key;
+  }
 
   const network = new vis.Network(
     document.getElementById("network"),
@@ -135,7 +157,7 @@
     if (!rawGraph || typeof rawGraph !== "object") return null;
     const name = String(rawGraph.name || "").trim();
     if (!name) return null;
-    const graphType = String(rawGraph.graph_type || rawGraph.graphType || "").trim().toLowerCase();
+    const graphType = normalizeGraphTypeKey(rawGraph.graph_type || rawGraph.graphType || "");
     const rawIndexes = Array.isArray(rawGraph.indexes) ? rawGraph.indexes : [];
     const indexes = rawIndexes
       .map((item) => String(item || "").trim())
@@ -1256,7 +1278,7 @@
     }
 
     chatRetrievalWarningText.textContent =
-      "Component graph requires a dense vector index (`node_vector`). This graph does not provide one. Choose One-Hop/Vector, or switch to a graph with a dense index.";
+      "Component Graph requires a dense vector index (`node_vector`). This graph does not provide one. Choose One-Hop/Vector, or switch to a graph with a dense index.";
     chatRetrievalWarning.classList.remove("hidden");
     chatRetrievalWarning.setAttribute("aria-hidden", "false");
   }
@@ -2019,23 +2041,24 @@
   }
 
   const importRequirementsByAdapter = {
-    lightrag: "Required: vdb_entities.json, vdb_relationships.json",
-    hipporag: "Required: graph.pickle · entity_embeddings/vdb_entity.parquet · chunk_embeddings/vdb_chunk.parquet · fact_embeddings/vdb_fact.parquet · openie_results_ner_*.json (in parent directory)",
-    g_retriever: "Required: nodes/{i}.csv · edges/{i}.csv · graphs/{i}.pt",
+    attribute_bundle_graph: "Required: vdb_entities.json, vdb_relationships.json",
+    topology_semantic_graph: "Required: graph.pickle · entity_embeddings/vdb_entity.parquet · chunk_embeddings/vdb_chunk.parquet · fact_embeddings/vdb_fact.parquet · openie_results_ner_*.json (in parent directory)",
+    subgraph_union_graph: "Required: nodes/{i}.csv · edges/{i}.csv · graphs/{i}.pt",
     expla_graphs: "Required: a .tsv file",
     freebasekg: "Required: Hugging Face dataset name",
-    fastinsight: "Required: nodes.jsonl, edges.jsonl (blocked in import mode)",
+    component_graph: "Required: nodes.jsonl, edges.jsonl (blocked in import mode)",
   };
 
 
   function updateImportVisibility() {
     if (!importAdapterSelect || !importFileGroup || !importDatasetGroup) return;
-    const adapter = importAdapterSelect.value;
+    const adapter = normalizeGraphTypeKey(importAdapterSelect.value);
     const isFreebase = adapter === "freebasekg";
     importFileGroup.classList.toggle("hidden", isFreebase);
     importDatasetGroup.classList.toggle("hidden", !isFreebase);
     if (importFileRequirements) {
-      importFileRequirements.textContent = importRequirementsByAdapter[adapter] + "\nUpload all of your necessary graph files for the graph type in .zip file.";
+      const requirements = importRequirementsByAdapter[adapter] || "Upload all required graph files.";
+      importFileRequirements.textContent = requirements + "\nUpload all of your necessary graph files for the graph type in .zip file.";
     }
     if (importFastInsightWarning) {
       importFastInsightWarning.classList.remove("hidden");
@@ -2052,16 +2075,16 @@
     importForm.onsubmit = async (event) => {
       event.preventDefault();
       if (!importAdapterSelect) return;
-      const adapter = importAdapterSelect.value;
+      const adapter = normalizeGraphTypeKey(importAdapterSelect.value);
       const datasetName = importDatasetNameInput ? importDatasetNameInput.value.trim() : "";
       if (!datasetName) {
         if (importStatus) importStatus.textContent = "Dataset Name is required.";
         return;
       }
-      if (adapter === "fastinsight") {
+      if (adapter === "component_graph") {
         if (importStatus) {
           importStatus.textContent =
-            "Component graph requires a dense vector index (`node_vector`). This graph does not provide one. Choose One-Hop/Vector, or switch to a graph with a dense index.";
+            "Component Graph requires a dense vector index (`node_vector`). This graph does not provide one. Choose One-Hop/Vector, or switch to a graph with a dense index.";
         }
         return;
       }

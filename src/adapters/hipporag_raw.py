@@ -109,7 +109,7 @@ class HippoRAGAdapter(GraphAdapter):
     """
 
     def __init__(self):
-        super().__init__(name="hipporag", version="2.0.0")
+        super().__init__(name="topology_semantic_graph", version="2.0.0")
 
     def can_import(self, source: Any) -> bool:
         try:
@@ -250,7 +250,7 @@ class HippoRAGAdapter(GraphAdapter):
                         metadata["passage"] = passage_text
                     if keep_source_reference:
                         metadata["_source_path"] = str(src)
-                        metadata["_source_style"] = "hipporag"
+                        metadata["_source_style"] = "topology_semantic_graph"
                     graph.add_node(
                         NodeRecord(
                             id=source_id,
@@ -273,7 +273,7 @@ class HippoRAGAdapter(GraphAdapter):
                         metadata["passage"] = passage_text
                     if keep_source_reference:
                         metadata["_source_path"] = str(src)
-                        metadata["_source_style"] = "hipporag"
+                        metadata["_source_style"] = "topology_semantic_graph"
                     graph.add_node(
                         NodeRecord(
                             id=target_id,
@@ -316,7 +316,7 @@ class HippoRAGAdapter(GraphAdapter):
                     metadata = {"hash_id": vid}
                     if keep_source_reference:
                         metadata["_source_path"] = str(src)
-                        metadata["_source_style"] = "hipporag"
+                        metadata["_source_style"] = "topology_semantic_graph"
                     graph.add_node(
                         NodeRecord(
                             id=vid,

@@ -12,7 +12,7 @@
 
 The main idea behind GraphContainer is simple: different graph RAG methods store graph data in different formats, but once those graphs are converted into a common structure, they can be searched, visualized, and compared in a much more consistent way. In this repository, that common structure is implemented through the Unified Graph State, which stores nodes, edges, adjacency information, and vector indexes in a form that downstream components can access without caring about the original source format.
 
-At the core of the implementation are `SimpleGraphContainer` and `SearchableGraphContainer`. `SimpleGraphContainer` is responsible for holding the in-memory graph itself, while `SearchableGraphContainer` extends that base structure with pluggable vector indexes such as `node_vector`. On top of this container layer, the repository provides adapters for different upstream graph formats, including `import_graph_from_fastinsight` (for Component Graph), `import_graph_from_lightrag` (for Attribute Bundle Graph), and `import_graph_from_hipporag` (for Topology-Semantic Graph). These adapters are the entry points that translate method-specific graph storage into the unified internal graph state used by the rest of the system.
+At the core of the implementation are `SimpleGraphContainer` and `SearchableGraphContainer`. `SimpleGraphContainer` is responsible for holding the in-memory graph itself, while `SearchableGraphContainer` extends that base structure with pluggable vector indexes such as `node_vector`. On top of this container layer, the repository provides adapters for different upstream graph formats, including `import_graph_from_component_graph` (Component Graph), `import_graph_from_attribute_bundle_graph` (Attribute Bundle Graph), `import_graph_from_topology_semantic_graph` (Topology-Semantic Graph), and `import_graph_from_subgraph_union_graph` (Subgraph Union Graph). These adapters are the entry points that translate method-specific graph storage into the unified internal graph state used by the rest of the system.
 
 Once a graph has been loaded, retrieval is handled by the RAG modules under `src/rag`. The embedding path is managed through `src/rag/embeddings.py`, and the retrieval logic lives in `src/rag/retrievers.py`. The repository currently includes two retrieval strategies: `OneHopRetriever`, which starts from vector-retrieved seed nodes and expands to their immediate neighbors, and `FastInsightRetriever`, which applies a multi-stage retrieval process with seed selection, deeper exploration, and final filtering. In the current experiment setup, the initial retrieval size is set to `10`, and FastInsight keeps the final `5` nodes before answer generation.
 
@@ -63,7 +63,7 @@ uv run python -m GraphContainer.visualizer.live_visualizer \
 ``` -->
 
 ```bash
-python serve.py --graph fastinsight:./data/rag_storage/fastinsight/scifact-openai \
+python serve.py --graph component_graph:./data/rag_storage/fastinsight/scifact-openai \
   --host 127.0.0.1 \
   --port 8765 \
   --hops 2
@@ -87,12 +87,12 @@ visualizer = serve_graph(
 print(visualizer.url)
 ```
 
-If your graph is stored in FastInsight format, you can also serve it directly from storage:
+If your graph is stored in Component Graph format, you can also serve it directly from storage:
 
 ```python
-from GraphContainer import serve_fastinsight
+from GraphContainer import serve_component_graph
 
-visualizer = serve_fastinsight(
+visualizer = serve_component_graph(
     "data/rag_storage/fastinsight/scifact-openai",
     host="127.0.0.1",
     port=8765,

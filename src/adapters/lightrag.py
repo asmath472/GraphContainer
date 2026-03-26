@@ -151,7 +151,7 @@ class LightRAGAdapter(GraphAdapter):
     """Adapter for LightRAG-style NanoVectorDB graph files."""
 
     def __init__(self, *, version: str = "0.1.0"):
-        super().__init__(name="lightrag", version=version)
+        super().__init__(name="attribute_bundle_graph", version=version)
 
     def can_import(self, source: Any) -> bool:
         try:
@@ -391,7 +391,7 @@ class LightRAGAdapter(GraphAdapter):
         if keep_source_reference:
             for node in graph.nodes.values():
                 node.metadata.setdefault("_source_path", str(source_path))
-                node.metadata.setdefault("_source_style", "lightrag")
+                node.metadata.setdefault("_source_style", "attribute_bundle_graph")
 
         _log_timing("import complete", import_start)
         _maybe_pdb("import complete")

@@ -21,6 +21,38 @@ from urllib.parse import parse_qs, urlparse
 from ..core import SimpleGraphContainer
 
 
+_GRAPH_FORMAT_ALIASES: Dict[str, str] = {
+    "component": "component_graph",
+    "component_graph": "component_graph",
+    "fastinsight": "component_graph",
+    "attribute_bundle": "attribute_bundle_graph",
+    "attribute_bundle_graph": "attribute_bundle_graph",
+    "lightrag": "attribute_bundle_graph",
+    "topology_semantic": "topology_semantic_graph",
+    "topology_semantic_graph": "topology_semantic_graph",
+    "hipporag": "topology_semantic_graph",
+    "subgraph_union": "subgraph_union_graph",
+    "subgraph_union_graph": "subgraph_union_graph",
+    "g_retriever": "subgraph_union_graph",
+    "expla_graphs": "expla_graphs",
+    "freebasekg": "freebasekg",
+    "tog": "tog",
+}
+
+
+def _sanitize_adapter_key(adapter_key: Any) -> str:
+    return str(adapter_key or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _normalize_adapter_key(adapter_key: Any) -> str:
+    sanitized = _sanitize_adapter_key(adapter_key)
+    return _GRAPH_FORMAT_ALIASES.get(sanitized, sanitized)
+
+
+def _valid_adapter_keys() -> List[str]:
+    return list(_ADAPTER_IMPORTERS.keys())
+
+
 def _edge_overlay_key(source: str, target: str, relation: str = "RELATED") -> str:
     return f"{source}|||{target}|||{relation}"
 
@@ -131,10 +163,11 @@ class LiveGraphVisualizer:
     ) -> None:
         """Register a named graph. The first registered graph becomes active."""
         with self._lock:
+            normalized_graph_type = _normalize_adapter_key(graph_type)
             self._graphs[name] = {
                 "label": label or name,
                 "container": container,
-                "graph_type": graph_type or "",
+                "graph_type": normalized_graph_type or graph_type or "",
             }
             if not self._active_graph_name:
                 self._active_graph_name = name
@@ -270,10 +303,13 @@ class LiveGraphVisualizer:
             node = self.container.get_node(node_id)
             if node is None:
                 continue
-            is_lightrag = node.metadata.get("_source_style") == "lightrag"
-            lightrag_label = node.metadata.get("entity_name") if is_lightrag else None
-            if lightrag_label:
-                label_text = str(lightrag_label)
+            source_style = _normalize_adapter_key(node.metadata.get("_source_style", ""))
+            is_attribute_bundle_graph = source_style == "attribute_bundle_graph"
+            attribute_bundle_label = (
+                node.metadata.get("entity_name") if is_attribute_bundle_graph else None
+            )
+            if attribute_bundle_label:
+                label_text = str(attribute_bundle_label)
             else:
                 show_text_label = "original_label" in node.metadata and bool(node.text)
                 label_text = node.text if show_text_label else node.id
@@ -931,7 +967,8 @@ class LiveGraphVisualizer:
                         self._write_json({"error": str(exc)}, status=400)
                         return
 
-                    adapter_key = (fields.get("adapter") or "").strip()
+                    adapter_input = (fields.get("adapter") or "").strip()
+                    adapter_key = _normalize_adapter_key(adapter_input)
                     if not adapter_key:
                         self._write_json({"error": "adapter is required"}, status=400)
                         return
@@ -944,7 +981,10 @@ class LiveGraphVisualizer:
                     importer_path = _ADAPTER_IMPORTERS.get(adapter_key)
                     if importer_path is None:
                         self._write_json(
-                            {"error": f"Unknown adapter key {adapter_key!r}.", "valid": list(_ADAPTER_IMPORTERS)},
+                            {
+                                "error": f"Unknown adapter key {adapter_input!r}.",
+                                "valid": _valid_adapter_keys(),
+                            },
                             status=400,
                         )
                         return
@@ -1023,7 +1063,7 @@ class LiveGraphVisualizer:
                                 else:
                                     break
 
-                        if adapter_key == "hipporag":
+                        if adapter_key == "topology_semantic_graph":
                             resolved_root, error = _resolve_hipporag_root(source_path)
                             if error:
                                 self._write_json({"error": error}, status=400)
@@ -1053,7 +1093,9 @@ class LiveGraphVisualizer:
                         graph = import_fn(source_path)
 
                         with visualizer._lock:
-                            name = LiveGraphVisualizer._make_unique_name(visualizer._graphs, label or adapter_key)
+                            name = LiveGraphVisualizer._make_unique_name(
+                                visualizer._graphs, label or adapter_key
+                            )
                             visualizer.register_graph(
                                 name, graph, label=label, graph_type=adapter_key
                             )
@@ -1276,8 +1318,8 @@ def serve_graph(
 def serve_fastinsight(
     source_path: Union[str, Path],
     *,
-    name: str = "fastinsight",
-    label: str = "FastInsight",
+    name: str = "component_graph",
+    label: str = "Component Graph",
     host: str = "127.0.0.1",
     port: int = 8765,
     poll_interval_ms: int = 600,
@@ -1290,18 +1332,40 @@ def serve_fastinsight(
         graph,
         name=name,
         label=label,
-        graph_type="fastinsight",
+        graph_type="component_graph",
         host=host,
         port=port,
         poll_interval_ms=poll_interval_ms,
         default_hops=default_hops,
     )
 
+
+def serve_component_graph(
+    source_path: Union[str, Path],
+    *,
+    name: str = "component_graph",
+    label: str = "Component Graph",
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    poll_interval_ms: int = 600,
+    default_hops: int = 1,
+) -> LiveGraphVisualizer:
+    return serve_fastinsight(
+        source_path,
+        name=name,
+        label=label,
+        host=host,
+        port=port,
+        poll_interval_ms=poll_interval_ms,
+        default_hops=default_hops,
+    )
+
+
 def serve_lightrag(
     source_path: Union[str, Path],
     *,
-    name: str = "lightrag",
-    label: str = "LightRAG",
+    name: str = "attribute_bundle_graph",
+    label: str = "Attribute Bundle Graph",
     host: str = "127.0.0.1",
     port: int = 8765,
     poll_interval_ms: int = 600,
@@ -1323,7 +1387,7 @@ def serve_lightrag(
             graph,
             name=name,
             label=label,
-            graph_type="lightrag",
+            graph_type="attribute_bundle_graph",
             host=host,
             port=port,
             poll_interval_ms=poll_interval_ms,
@@ -1336,7 +1400,7 @@ def serve_lightrag(
         empty,
         name=name,
         label=label,
-        graph_type="lightrag",
+        graph_type="attribute_bundle_graph",
         host=host,
         port=port,
         poll_interval_ms=poll_interval_ms,
@@ -1346,16 +1410,49 @@ def serve_lightrag(
     def _load_graph() -> None:
         _set_env()
         graph = import_graph_from_lightrag(source_path)
-        visualizer.register_graph(name, graph, label=label, graph_type="lightrag")
+        visualizer.register_graph(
+            name,
+            graph,
+            label=label,
+            graph_type="attribute_bundle_graph",
+        )
 
     threading.Thread(target=_load_graph, daemon=True).start()
     return visualizer
 
+
+def serve_attribute_bundle_graph(
+    source_path: Union[str, Path],
+    *,
+    name: str = "attribute_bundle_graph",
+    label: str = "Attribute Bundle Graph",
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    poll_interval_ms: int = 600,
+    default_hops: int = 1,
+    attach_index: bool = True,
+    load_embeddings: bool = True,
+    lazy_load: bool = False,
+) -> LiveGraphVisualizer:
+    return serve_lightrag(
+        source_path,
+        name=name,
+        label=label,
+        host=host,
+        port=port,
+        poll_interval_ms=poll_interval_ms,
+        default_hops=default_hops,
+        attach_index=attach_index,
+        load_embeddings=load_embeddings,
+        lazy_load=lazy_load,
+    )
+
+
 def serve_hipporag(
     source_path: Union[str, Path],
     *,
-    name: str = "hipporag",
-    label: str = "HippoRAG",
+    name: str = "topology_semantic_graph",
+    label: str = "Topology-Semantic Graph",
     host: str = "127.0.0.1",
     port: int = 8765,
     poll_interval_ms: int = 600,
@@ -1368,18 +1465,40 @@ def serve_hipporag(
         graph,
         name=name,
         label=label,
-        graph_type="hipporag",
+        graph_type="topology_semantic_graph",
         host=host,
         port=port,
         poll_interval_ms=poll_interval_ms,
         default_hops=default_hops,
     )
 
+
+def serve_topology_semantic_graph(
+    source_path: Union[str, Path],
+    *,
+    name: str = "topology_semantic_graph",
+    label: str = "Topology-Semantic Graph",
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    poll_interval_ms: int = 600,
+    default_hops: int = 1,
+) -> LiveGraphVisualizer:
+    return serve_hipporag(
+        source_path,
+        name=name,
+        label=label,
+        host=host,
+        port=port,
+        poll_interval_ms=poll_interval_ms,
+        default_hops=default_hops,
+    )
+
+
 def serve_g_retriever(
     source_path: Union[str, Path],
     *,
-    name: str = "g_retriever",
-    label: str = "G-Retriever",
+    name: str = "subgraph_union_graph",
+    label: str = "Subgraph Union Graph",
     graph_id: Optional[str] = "all",
     host: str = "127.0.0.1",
     port: int = 8765,
@@ -1398,7 +1517,30 @@ def serve_g_retriever(
         graph,
         name=name,
         label=label,
-        graph_type="g_retriever",
+        graph_type="subgraph_union_graph",
+        host=host,
+        port=port,
+        poll_interval_ms=poll_interval_ms,
+        default_hops=default_hops,
+    )
+
+
+def serve_subgraph_union_graph(
+    source_path: Union[str, Path],
+    *,
+    name: str = "subgraph_union_graph",
+    label: str = "Subgraph Union Graph",
+    graph_id: Optional[str] = "all",
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    poll_interval_ms: int = 600,
+    default_hops: int = 1,
+) -> LiveGraphVisualizer:
+    return serve_g_retriever(
+        source_path,
+        name=name,
+        label=label,
+        graph_id=graph_id,
         host=host,
         port=port,
         poll_interval_ms=poll_interval_ms,
@@ -1481,20 +1623,20 @@ def serve_tog(
 
 
 _ADAPTER_IMPORTERS: Dict[str, str] = {
-    "fastinsight": "..adapters.fastinsight.import_graph_from_fastinsight",
-    "lightrag": "..adapters.lightrag.import_graph_from_lightrag",
-    "hipporag": "..adapters.hipporag.import_graph_from_hipporag",
-    "g_retriever": "..adapters.g_retriever.import_graph_from_g_retriever",
+    "component_graph": "..adapters.fastinsight.import_graph_from_fastinsight",
+    "attribute_bundle_graph": "..adapters.lightrag.import_graph_from_lightrag",
+    "topology_semantic_graph": "..adapters.hipporag.import_graph_from_hipporag",
+    "subgraph_union_graph": "..adapters.g_retriever.import_graph_from_g_retriever",
     "expla_graphs": "..adapters.expla_graphs.import_graph_from_expla_graphs",
     "freebasekg": "..adapters.freebasekg.import_graph_from_freebasekg",
 }
 
 _ADAPTER_DEFAULT_LABELS: Dict[str, str] = {
-    "fastinsight": "Component",
-    "lightrag": "Attribute Bundle",
-    "hipporag": "Topology-Semantic",
-    "g_retriever": "Subgraph Union",
-    "expla_graphs": "Triplet Sequence",
+    "component_graph": "Component Graph",
+    "attribute_bundle_graph": "Attribute Bundle Graph",
+    "topology_semantic_graph": "Topology-Semantic Graph",
+    "subgraph_union_graph": "Subgraph Union Graph",
+    "expla_graphs": "Triplet Sequence Graph",
 }
 
 
@@ -1551,9 +1693,10 @@ def _build_graph_label(
     graph_id: Optional[str] = None,
     dataset_name: str = "",
 ) -> str:
-    format_label = _ADAPTER_DEFAULT_LABELS.get(str(adapter_key), str(adapter_key))
+    canonical_adapter_key = _normalize_adapter_key(adapter_key)
+    format_label = _ADAPTER_DEFAULT_LABELS.get(canonical_adapter_key, canonical_adapter_key)
     dataset_label = _dataset_name_from_source(
-        adapter_key,
+        canonical_adapter_key,
         source_path,
         graph_id=graph_id,
         dataset_name=dataset_name,
@@ -1569,16 +1712,17 @@ def _validate_import_requirements(
     *,
     dataset_name: str = "",
 ) -> Optional[str]:
+    adapter_key = _normalize_adapter_key(adapter_key)
     importer_path = _ADAPTER_IMPORTERS.get(adapter_key)
     if importer_path is None:
         return f"Unknown adapter key: {adapter_key}"
 
     # Standard requirements strings for error messages
     requirements_msg = {
-        "fastinsight": "Requires nodes.jsonl and edges.jsonl.",
-        "lightrag": "Requires vdb_entities.json and vdb_relationships.json.",
-        "hipporag": "Requires graph.pickle, entity_embeddings, chunk_embeddings, fact_embeddings, and openie_results_ner_*.json.",
-        "g_retriever": "Requires nodes/{i}.csv, edges/{i}.csv, and graphs/{i}.pt files for each query i.",
+        "component_graph": "Requires nodes.jsonl and edges.jsonl.",
+        "attribute_bundle_graph": "Requires vdb_entities.json and vdb_relationships.json.",
+        "topology_semantic_graph": "Requires graph.pickle, entity_embeddings, chunk_embeddings, fact_embeddings, and openie_results_ner_*.json.",
+        "subgraph_union_graph": "Requires nodes/{i}.csv, edges/{i}.csv, and graphs/{i}.pt files for each query i.",
         "expla_graphs": "Requires a .tsv file.",
         "freebasekg": "Requires a Hugging Face dataset name (e.g. 'rmanluo/RoG-webqsp').",
     }
@@ -1589,10 +1733,10 @@ def _validate_import_requirements(
         mod = importlib.import_module(module_path, package=__name__.rsplit(".", 1)[0])
 
         adapter_class_map = {
-            "fastinsight": "FastInsightAdapter",
-            "lightrag": "LightRAGAdapter",
-            "hipporag": "HippoRAGAdapter",
-            "g_retriever": "GRetrieverAdapter",
+            "component_graph": "FastInsightAdapter",
+            "attribute_bundle_graph": "LightRAGAdapter",
+            "topology_semantic_graph": "HippoRAGAdapter",
+            "subgraph_union_graph": "GRetrieverAdapter",
             "expla_graphs": "ExplaGraphsAdapter",
             "freebasekg": "FreebaseKGAdapter",
         }
@@ -1648,7 +1792,8 @@ def serve_multi(
     ``graphs`` is a mapping from a human-readable graph *name* to either:
 
     * A ``(adapter_key, source_path)`` tuple, where *adapter_key* is one of
-      ``"fastinsight"``, ``"lightrag"``, ``"hipporag"``, ``"g_retriever"``, ``"expla_graphs"``, ``"freebasekg"``, ``"tog"``.
+      ``"component_graph"``, ``"attribute_bundle_graph"``, ``"topology_semantic_graph"``,
+      ``"subgraph_union_graph"``, ``"expla_graphs"``, ``"freebasekg"``, ``"tog"``.
     * A ``(adapter_key, source_path, label)`` tuple for a custom display label.
     * An already-loaded :class:`~GraphContainer.core.SimpleGraphContainer` instance.
 
@@ -1656,9 +1801,10 @@ def serve_multi(
 
         visualizer = serve_multi(
             {
-                "LightRAG":    ("lightrag",    "/data/lightrag"),
-                "HippoRAG":    ("hipporag",    "/data/hipporag"),
-                "G-Retriever": ("g_retriever", "/data/g_retriever"),
+                "Component Graph": ("component_graph", "/data/fastinsight"),
+                "Attribute Bundle Graph": ("attribute_bundle_graph", "/data/lightrag"),
+                "Topology-Semantic Graph": ("topology_semantic_graph", "/data/hipporag"),
+                "Subgraph Union Graph": ("subgraph_union_graph", "/data/g_retriever"),
                 "Expla Graphs": ("expla_graphs", "/data/expla_graphs"),
                 "Freebase KG": ("freebasekg", "/data/freebasekg"),
                 "ToG":         ("tog",          "/data/tog"),
@@ -1680,11 +1826,14 @@ def serve_multi(
             extra_kwargs: Dict[str, Any] = {}
             if len(spec) == 2:
                 adapter_key, source_path = spec
+                adapter_key = _normalize_adapter_key(adapter_key)
                 label = _build_graph_label(str(adapter_key), source_path)
             elif len(spec) == 3:
                 adapter_key, source_path, label = spec
+                adapter_key = _normalize_adapter_key(adapter_key)
             elif len(spec) == 4:
                 adapter_key, source_path, label, extra_kwargs = spec
+                adapter_key = _normalize_adapter_key(adapter_key)
             else:
                 raise ValueError(
                     f"Graph spec for {name!r} must be (adapter_key, path), "
@@ -1695,7 +1844,7 @@ def serve_multi(
             if importer_path is None:
                 raise ValueError(
                     f"Unknown adapter key {adapter_key!r}. "
-                    f"Valid keys: {list(_ADAPTER_IMPORTERS.keys())}"
+                    f"Valid keys: {_valid_adapter_keys()}"
                 )
             # e.g. "..adapters.lightrag.import_graph_from_lightrag"
             module_path, fn_name = importer_path.rsplit(".", 1)
@@ -1706,8 +1855,9 @@ def serve_multi(
             # Assume it's already a SimpleGraphContainer
             container = spec
             label = name
+            adapter_key = ""
 
-        visualizer.register_graph(name, container, label=label)
+        visualizer.register_graph(name, container, label=label, graph_type=adapter_key)
 
     if not visualizer._graphs:
         raise ValueError("No graphs were registered. Pass at least one entry in 'graphs'.")
@@ -1723,18 +1873,20 @@ def _main() -> None:
         epilog="""
     Examples:
     # Single format
-    python -m GraphContainer.visualizer.live_visualizer --format lightrag --source /data/lightrag
-    python -m GraphContainer.visualizer.live_visualizer --format hipporag --source /data/hipporag
-    python -m GraphContainer.visualizer.live_visualizer --format g_retriever --source /data/g_retriever
+    python -m GraphContainer.visualizer.live_visualizer --format component_graph --source /data/fastinsight
+    python -m GraphContainer.visualizer.live_visualizer --format attribute_bundle_graph --source /data/lightrag
+    python -m GraphContainer.visualizer.live_visualizer --format topology_semantic_graph --source /data/hipporag
+    python -m GraphContainer.visualizer.live_visualizer --format subgraph_union_graph --source /data/g_retriever
     python -m GraphContainer.visualizer.live_visualizer --format expla_graphs --source /data/expla_graphs
     python -m GraphContainer.visualizer.live_visualizer --format freebasekg --source rmanluo/RoG-webqsp
     python -m GraphContainer.visualizer.live_visualizer --format tog --source /data/tog
 
     # Multiple formats at once (specify --graph format:path pairs)
     python -m GraphContainer.visualizer.live_visualizer \\
-        --graph lightrag:/data/lightrag \\
-        --graph hipporag:/data/hipporag \\
-        --graph g_retriever:/data/g_retriever \\
+        --graph component_graph:/data/fastinsight \\
+        --graph attribute_bundle_graph:/data/lightrag \\
+        --graph topology_semantic_graph:/data/hipporag \\
+        --graph subgraph_union_graph:/data/g_retriever \\
         --graph expla_graphs:/data/expla_graphs \\
         --graph freebasekg:rmanluo/RoG-webqsp \\
         --graph tog:/data/tog
@@ -1743,8 +1895,11 @@ def _main() -> None:
     parser.add_argument(
         "--format",
         default=None,
-        choices=["lightrag", "hipporag", "g_retriever", "expla_graphs", "freebasekg", "tog", "fastinsight"],
-        help="Graph adapter format (use with --source for a single graph)",
+        help=(
+            "Graph adapter format (use with --source for a single graph). "
+            "Canonical formats: component_graph, attribute_bundle_graph, "
+            "topology_semantic_graph, subgraph_union_graph, expla_graphs, freebasekg, tog."
+        ),
     )
     parser.add_argument(
         "--source",
@@ -1759,8 +1914,9 @@ def _main() -> None:
         default=[],
         help=(
             "Register a graph as FORMAT:PATH (repeatable). "
-            "FORMAT is one of: lightrag, hipporag, g_retriever, expla_graphs, freebasekg, tog, fastinsight. "
-            "Example: --graph lightrag:/data/lr --graph hipporag:/data/hr"
+            "FORMAT is one of: component_graph, attribute_bundle_graph, "
+            "topology_semantic_graph, subgraph_union_graph, expla_graphs, freebasekg, tog. "
+            "Example: --graph component_graph:/data/component --graph topology_semantic_graph:/data/topology"
         ),
     )
     parser.add_argument("--host", default="127.0.0.1")
@@ -1772,7 +1928,7 @@ def _main() -> None:
         default=None,
         dest="graph_id",
         help=(
-            "Graph ID for formats that store multiple graphs (e.g. g_retriever). "
+            "Graph ID for formats that store multiple graphs (e.g. subgraph_union_graph). "
             "Use 'all' to merge all CSV pairs into one graph (default when omitted). "
             "Use a specific id like '0' to load a single graph."
         ),
@@ -1780,13 +1936,13 @@ def _main() -> None:
     args = parser.parse_args()
 
     _serve_fn_map = {
-        "lightrag": serve_lightrag,
-        "hipporag": serve_hipporag,
-        "g_retriever": serve_g_retriever,
+        "component_graph": serve_component_graph,
+        "attribute_bundle_graph": serve_attribute_bundle_graph,
+        "topology_semantic_graph": serve_topology_semantic_graph,
+        "subgraph_union_graph": serve_subgraph_union_graph,
         "expla_graphs": serve_expla_graphs,
         "freebasekg": serve_freebasekg,
         "tog": serve_tog,
-        "fastinsight": serve_fastinsight,
     }
 
     common_kwargs: Dict[str, Any] = {
@@ -1803,11 +1959,12 @@ def _main() -> None:
             sep = entry.find(":")
             if sep == -1:
                 parser.error(f"--graph value must be FORMAT:PATH, got: {entry!r}")
-            fmt = entry[:sep].strip()
+            raw_fmt = entry[:sep].strip()
+            fmt = _normalize_adapter_key(raw_fmt)
             raw_path = entry[sep + 1:].strip()
             if fmt not in _ADAPTER_IMPORTERS:
                 parser.error(
-                    f"Unknown format {fmt!r}. Valid: {list(_ADAPTER_IMPORTERS.keys())}"
+                    f"Unknown format {raw_fmt!r}. Valid: {_valid_adapter_keys()}"
                 )
             path = raw_path
             extra_kwargs: Dict[str, Any] = {}
@@ -1832,10 +1989,13 @@ def _main() -> None:
 
         # Also include --source/--format if provided alongside --graph
         if args.format and args.source:
-            fmt, path = args.format, args.source
+            raw_fmt, path = args.format, args.source
+            fmt = _normalize_adapter_key(raw_fmt)
+            if fmt not in _serve_fn_map:
+                parser.error(f"Unknown format {raw_fmt!r}. Valid: {_valid_adapter_keys()}")
             label = _build_graph_label(fmt, path, graph_id=args.graph_id)
             name = LiveGraphVisualizer._make_unique_name(multi_spec, label)
-            if fmt == "g_retriever":
+            if fmt == "subgraph_union_graph":
                 multi_spec[name] = (fmt, path, label, {"graph_id": args.graph_id or "all"})
             else:
                 multi_spec[name] = (fmt, path, label)
@@ -1850,10 +2010,13 @@ def _main() -> None:
     else:
         if not args.source:
             parser.error("--source is required when not using --graph")
-        fmt = args.format or "lightrag"
+        raw_fmt = args.format or "attribute_bundle_graph"
+        fmt = _normalize_adapter_key(raw_fmt)
+        if fmt not in _serve_fn_map:
+            parser.error(f"Unknown format {raw_fmt!r}. Valid: {_valid_adapter_keys()}")
         serve_fn = _serve_fn_map[fmt]
         extra_kwargs: Dict[str, Any] = {}
-        if fmt == "g_retriever":
+        if fmt == "subgraph_union_graph":
             # default to "all" so multi-CSV datasets just work out of the box
             extra_kwargs["graph_id"] = args.graph_id if args.graph_id is not None else "all"
         label = _build_graph_label(fmt, args.source, graph_id=extra_kwargs.get("graph_id"))
