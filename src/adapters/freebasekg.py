@@ -54,6 +54,15 @@ class FreebaseKGAdapter(GraphAdapter):
     def __init__(self):
         super().__init__(name="freebasekg", version="0.1.0")
 
+    def can_import(self, source: Any) -> bool:
+        try:
+            # FreebaseKG is special; it primarily expects a HF dataset name (str)
+            # or a path that we intentionally reject for this adapter.
+            mode, _ = _normalize_source(source)
+            return mode == "hf"
+        except Exception:
+            return False
+
     def import_graph(
         self,
         source: Any,

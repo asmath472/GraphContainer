@@ -53,6 +53,13 @@ class FastInsightAdapter(GraphAdapter):
     def __init__(self):
         super().__init__(name="fastinsight", version="0.1.0")
 
+    def can_import(self, source: Any) -> bool:
+        try:
+            src = _normalize_source(source)
+            return (src / "nodes.jsonl").exists() and (src / "edges.jsonl").exists()
+        except Exception:
+            return False
+
     def _get_manifest(self, path: Path) -> Dict[str, Any]:
         for name in ("manifest.json", "menifest.json"):
             p = path / name

@@ -3,21 +3,44 @@ from __future__ import annotations
 
 from ast import literal_eval
 import json
+import os
 from glob import glob
 from hashlib import md5
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from tqdm import tqdm
+
 from ..core import SearchableGraphContainer, SimpleGraphContainer
 from ..types import EdgeRecord, NodeRecord
 from ..utils import container_or_new
 from .base import GraphAdapter, GraphAdapterError, UnsupportedSourceError
+from ..indexers import ChromaCollectionIndexer
 
 
 def _normalize_source(source: Any) -> Path:
     if isinstance(source, (str, Path)):
         return Path(source)
     raise UnsupportedSourceError(f"Unsupported source type: {type(source)}")
+
+
+def _resolve_working_dir(source: Any) -> Path:
+    """Resolve a dataset root to the nested HippoRAG working directory."""
+    src = _normalize_source(source)
+
+    if (src / "graph.pickle").exists():
+        return src
+
+    matches = sorted(path.parent for path in src.glob("*/graph.pickle"))
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise UnsupportedSourceError(
+            f"Multiple HippoRAG working directories found under: {src}"
+        )
+    raise UnsupportedSourceError(
+        f"HippoRAG working directory not found under: {src}"
+    )
 
 
 def _normalize_text_key(value: Any) -> str:
@@ -54,6 +77,42 @@ def _parse_fact_triple(raw_content: Any) -> Optional[Tuple[str, str, str]]:
     return None
 
 
+def _flush_upsert(
+    col: Any,
+    ids: List[str],
+    embs: List[List[float]],
+    docs: List[str],
+    metas: List[Dict[str, Any]],
+) -> None:
+    if ids:
+        col.upsert(ids=ids, embeddings=embs, documents=docs, metadatas=metas)
+        ids.clear()
+        embs.clear()
+        docs.clear()
+        metas.clear()
+
+
+def _read_parquet(path: Path) -> Tuple[List[str], List[str], List[Any]]:
+    """Read a HippoRAG EmbeddingStore parquet file.
+
+    Returns (hash_ids, texts, embeddings).  If the file does not exist,
+    returns three empty lists so callers can degrade gracefully.
+    """
+    if not path.exists():
+        return [], [], []
+
+    try:
+        import pandas as pd
+    except ImportError as exc:
+        raise ImportError("pandas is required to read HippoRAG parquet files") from exc
+
+    df = pd.read_parquet(path)
+    hash_ids = df["hash_id"].values.tolist()
+    texts = df["content"].values.tolist()
+    embeddings = df["embedding"].values.tolist()
+    return hash_ids, texts, embeddings
+
+
 def _load_igraph(pickle_path: Path) -> Any:
     """Load an igraph Graph from a pickle file."""
     try:
@@ -65,7 +124,7 @@ def _load_igraph(pickle_path: Path) -> Any:
 
 
 def _iter_openie_triples(openie_path: Path):
-    """Yield (head, relation, tail, passage_id, passage_text) tuples from OpenIE results.
+    """Yield (head, relation, tail) string-tuples from an OpenIE results file.
 
     The file has the structure::
 
@@ -84,10 +143,36 @@ def _iter_openie_triples(openie_path: Path):
 
     for doc in data.get("docs", []):
         passage_id = doc.get("idx", "")
-        passage_text = doc.get("passage", "")
         for triple in doc.get("extracted_triples", []):
             if isinstance(triple, (list, tuple)) and len(triple) == 3:
-                yield str(triple[0]), str(triple[1]), str(triple[2]), passage_id, passage_text
+                yield str(triple[0]), str(triple[1]), str(triple[2]), passage_id
+
+
+def _iter_openie_docs(openie_path: Path):
+    """Yield OpenIE docs with chunk id, passage text, entities, and triples."""
+    if not openie_path.exists():
+        return
+
+    with openie_path.open("r", encoding="utf-8") as fh:
+        data = json.load(fh)
+
+    for doc in data.get("docs", []):
+        entities = [
+            str(entity)
+            for entity in doc.get("extracted_entities", [])
+            if entity is not None and str(entity).strip()
+        ]
+        triples = [
+            (str(triple[0]), str(triple[1]), str(triple[2]))
+            for triple in doc.get("extracted_triples", [])
+            if isinstance(triple, (list, tuple)) and len(triple) == 3
+        ]
+        yield {
+            "idx": str(doc.get("idx", "")),
+            "passage": str(doc.get("passage", "")),
+            "entities": entities,
+            "triples": triples,
+        }
 
 
 class HippoRAGAdapter(GraphAdapter):
@@ -97,14 +182,20 @@ class HippoRAGAdapter(GraphAdapter):
 
         <working_dir>/
             graph.pickle                         – igraph Graph (nodes + weighted edges)
-            openie_results_ner_<llm>.json        – OpenIE triples (used here)
+            entity_embeddings/
+                vdb_entity.parquet               – phrase/entity nodes
+            chunk_embeddings/
+                vdb_chunk.parquet                – passage/chunk nodes
+            fact_embeddings/
+                vdb_fact.parquet                 – triple-level facts
 
-    The ``openie_results_ner_<llm>.json`` file is used to reconstruct nodes
-    and edge relations. The adapter discovers it automatically by globbing
-    the working directory first, then the parent directory. You can also pass
-    ``openie_path`` as a kwarg to override this.
+    The ``openie_results_ner_<llm>.json`` file lives one level up
+    (in ``save_dir``) and is used to reconstruct edge *relations*.  The
+    adapter discovers it automatically by globbing the parent directory; you
+    can also pass ``openie_path`` as a kwarg to override this.
 
-    The ``source`` argument should be the *working directory*
+    The ``source`` argument can be either the dataset root
+    (``{save_dir}``) or the nested working directory
     (``{save_dir}/{llm_name}_{embedding_model_name}``).
     """
 
@@ -113,21 +204,32 @@ class HippoRAGAdapter(GraphAdapter):
 
     def can_import(self, source: Any) -> bool:
         try:
-            src = _normalize_source(source)
+            src = _resolve_working_dir(source)
             if not (src / "graph.pickle").exists():
                 return False
-            if (src / "openie_results_ner_gpt-4o-mini.json").exists():
-                return True
-            if any((src / f).exists() for f in ["openie_results_ner_gpt-4o.json"]):
-                return True
-            # Fallback: allow any openie_results_ner_*.json in src or parent
-            if glob(str(src / "openie_results_ner_*.json")):
-                return True
-            if glob(str(src.parent / "openie_results_ner_*.json")):
-                return True
-            return False
+            # Parquet files may sit directly in src/ or inside a model-named
+            # subdirectory (e.g. gpt-4o-mini_text-embedding-3-small/).
+            def _has_parquet(name: str) -> bool:
+                return bool(list(src.glob(f"**/{name}")))
+            if not _has_parquet("vdb_entity.parquet"):
+                return False
+            if not _has_parquet("vdb_chunk.parquet"):
+                return False
+            if not _has_parquet("vdb_fact.parquet"):
+                return False
+            # OpenIE file may live alongside graph.pickle (same dir)
+            # OR one level up (top-level of extracted zip).
+            from glob import glob as _glob
+            openie_found = (
+                _glob(str(src / "openie_results_ner_*.json"))
+                or _glob(str(src.parent / "openie_results_ner_*.json"))
+            )
+            if not openie_found:
+                return False
+            return True
         except Exception:
             return False
+
 
     # ---------------------------------------------------------------------- #
     # import_graph                                                             #
@@ -140,32 +242,86 @@ class HippoRAGAdapter(GraphAdapter):
         *,
         keep_source_reference: bool = False,
         load_embeddings: bool = True,
+        attach_index: Optional[bool] = None,
         openie_path: Optional[str] = None,
         **kwargs: Any,
     ) -> SearchableGraphContainer:
         """Import a HippoRAG v2 graph from *source* working directory.
 
         Args:
-            source: Path to the HippoRAG working directory that contains
-                ``graph.pickle`` and the ``*_embeddings/`` sub-directories.
+            source: Path to the HippoRAG dataset root or working directory
+                that contains ``graph.pickle`` and the ``*_embeddings/``
+                sub-directories.
             container: Optional pre-existing container to populate.
             keep_source_reference: If True, stores ``_source_path`` /
                 ``_source_style`` in every node's metadata.
             load_embeddings: If True (default), loads stored embedding vectors
                 into each :class:`NodeRecord`.
+            attach_index: If True, upserts entity and chunk embeddings into a
+                ChromaDB collection and attaches it as the ``node_vector``
+                index so that FastInsight vector search works.  Defaults to
+                the ``HIPPORAG_ATTACH_INDEX`` env-var (True when unset).
             openie_path: Explicit path to the
                 ``openie_results_ner_<llm>.json`` file.  When omitted the
                 adapter globs the *parent* of *source* for a matching file.
                 Fact relations are primarily reconstructed from
                 ``fact_embeddings/vdb_fact.parquet``.
         """
-        src = _normalize_source(source)
+        src = _resolve_working_dir(source)
 
         graph_pickle = src / "graph.pickle"
+        entity_parquet = src / "entity_embeddings" / "vdb_entity.parquet"
+        chunk_parquet = src / "chunk_embeddings" / "vdb_chunk.parquet"
+        fact_parquet = src / "fact_embeddings" / "vdb_fact.parquet"
+
         if not graph_pickle.exists():
             raise UnsupportedSourceError(
                 f"HippoRAG graph.pickle not found under: {src}"
             )
+
+        # ------------------------------------------------------------------ #
+        # 0. Resolve index-attachment settings from env / kwargs              #
+        # ------------------------------------------------------------------ #
+        def _env_bool(name: str, default: bool) -> bool:
+            raw = os.getenv(name)
+            if raw is None:
+                return default
+            return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+        if attach_index is None:
+            attach_index = _env_bool("HIPPORAG_ATTACH_INDEX", True)
+        batch_size = int(os.getenv("HIPPORAG_BATCH_SIZE", "5000"))
+        db_path = os.getenv("VECTOR_STORE_PATH", "./data/database/chroma_db")
+        distance_metric = os.getenv("VECTOR_DISTANCE_METRIC", "cosine")
+
+        # Set up ChromaDB collections if we will be attaching an index.
+        node_col = None
+        edge_col = None
+        if attach_index and load_embeddings:
+            import chromadb
+
+            base_name = Path(source).resolve().name if isinstance(source, (str, Path)) else src.name
+            node_col_name = f"{base_name}_nodes"
+            edge_col_name = f"{base_name}_facts"
+            db_dir = Path(db_path).resolve()
+            db_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                _chroma_client = chromadb.PersistentClient(path=str(db_dir))
+            except Exception:
+                _chroma_client = chromadb.EphemeralClient()
+                db_path = None
+            node_col = _chroma_client.get_or_create_collection(name=node_col_name)
+            edge_col = _chroma_client.get_or_create_collection(name=edge_col_name)
+
+        # Accumulation buffers for batched upserts.
+        node_ids: List[str] = []
+        node_embs: List[List[float]] = []
+        node_docs: List[str] = []
+        node_metas: List[Dict[str, Any]] = []
+        edge_ids: List[str] = []
+        edge_embs: List[List[float]] = []
+        edge_docs: List[str] = []
+        edge_metas: List[Dict[str, Any]] = []
 
         # ------------------------------------------------------------------ #
         # 1. Load igraph → get edge topology + weights                        #
@@ -179,9 +335,11 @@ class HippoRAGAdapter(GraphAdapter):
             ig_graph = None
 
         # ------------------------------------------------------------------ #
-        # 2. OpenIE-only mode (no parquet)                                    #
+        # 2. Load embedding parquet files                                      #
         # ------------------------------------------------------------------ #
-        openie_only = True
+        entity_ids, entity_texts, entity_embs = _read_parquet(entity_parquet)
+        chunk_ids, chunk_texts, chunk_embs = _read_parquet(chunk_parquet)
+        fact_ids, fact_texts, fact_embs = _read_parquet(fact_parquet)
 
         # ------------------------------------------------------------------ #
         # 3. Discover OpenIE file for relation labels                          #
@@ -190,28 +348,26 @@ class HippoRAGAdapter(GraphAdapter):
         if openie_path is not None:
             resolved_openie = Path(openie_path)
         else:
-            # Prefer openie_results_ner_*.json under the working dir, then parent.
-            matches = sorted(glob(str(src / "openie_results_ner_*.json")))
-            if not matches:
-                parent = src.parent
-                matches = sorted(glob(str(parent / "openie_results_ner_*.json")))
+            # Glob parent directory for openie_results_ner_*.json
+            parent = src.parent
+            matches = sorted(glob(str(parent / "openie_results_ner_*.json")))
             if matches:
                 resolved_openie = Path(matches[-1])
 
-        # Build a set of known (head, tail) → relation for edge enrichment
+        # Build OpenIE lookup tables for relation enrichment and chunk-entity links.
         triple_relation_map: Dict[Tuple[str, str], str] = {}
-        entity_passage_map: Dict[str, str] = {}
-        edge_passage_map: Dict[Tuple[str, str], str] = {}
+        openie_chunk_entities: Dict[str, List[str]] = {}
         if resolved_openie is not None:
-            for head, rel, tail, _, passage_text in _iter_openie_triples(resolved_openie):
-                head_key = _normalize_text_key(head)
-                tail_key = _normalize_text_key(tail)
-                if head_key and tail_key:
-                    triple_relation_map[(head_key, tail_key)] = rel
-                    if passage_text:
-                        entity_passage_map.setdefault(head_key, passage_text)
-                        entity_passage_map.setdefault(tail_key, passage_text)
-                        edge_passage_map.setdefault((head_key, tail_key), passage_text)
+            for doc in _iter_openie_docs(resolved_openie):
+                passage_id = doc["idx"]
+                if passage_id:
+                    openie_chunk_entities[passage_id] = doc["entities"]
+
+                for head, rel, tail in doc["triples"]:
+                    head_key = _normalize_text_key(head)
+                    tail_key = _normalize_text_key(tail)
+                    if head_key and tail_key:
+                        triple_relation_map[(head_key, tail_key)] = rel
 
         # ------------------------------------------------------------------ #
         # 4. Populate the graph container                                      #
@@ -221,33 +377,201 @@ class HippoRAGAdapter(GraphAdapter):
         graph.edges = []
         graph._adj = {}
         entity_text_to_ids: Dict[str, List[str]] = {}
-        openie_seeded = False
+
+        # Entity nodes (phrase nodes) – processed in batches with tqdm
+        entity_total = len(entity_ids)
+        for batch_start in tqdm(
+            range(0, max(entity_total, 1), batch_size),
+            desc="Loading entity nodes",
+            unit="batch",
+        ):
+            batch_end = min(batch_start + batch_size, entity_total)
+            for hash_id, text, emb in zip(
+                entity_ids[batch_start:batch_end],
+                entity_texts[batch_start:batch_end],
+                entity_embs[batch_start:batch_end],
+            ):
+                node_id = str(hash_id)
+                node_text = None if text is None else str(text)
+                metadata: Dict[str, Any] = {"hash_id": node_id, "node_type": "Entity"}
+                if keep_source_reference:
+                    metadata["_source_path"] = str(src)
+                    metadata["_source_style"] = "hipporag"
+                emb_val = emb if load_embeddings else None
+                graph.add_node(
+                    NodeRecord(
+                        id=node_id,
+                        type="Entity",
+                        text=node_text,
+                        embedding=emb_val,
+                        metadata=metadata,
+                    )
+                )
+                text_key = _normalize_text_key(node_text)
+                if text_key:
+                    entity_text_to_ids.setdefault(text_key, []).append(node_id)
+                # Buffer for ChromaDB upsert
+                if node_col is not None and emb_val is not None:
+                    emb_list = emb_val.tolist() if hasattr(emb_val, "tolist") else list(emb_val)
+                    node_ids.append(node_id)
+                    node_embs.append(emb_list)
+                    node_docs.append(node_text or "")
+                    node_metas.append(dict(metadata))
+                    if len(node_ids) >= batch_size:
+                        _flush_upsert(node_col, node_ids, node_embs, node_docs, node_metas)
+
+        # Chunk / passage nodes – processed in batches with tqdm
+        chunk_total = len(chunk_ids)
+        for batch_start in tqdm(
+            range(0, max(chunk_total, 1), batch_size),
+            desc="Loading chunk nodes",
+            unit="batch",
+        ):
+            batch_end = min(batch_start + batch_size, chunk_total)
+            for hash_id, text, emb in zip(
+                chunk_ids[batch_start:batch_end],
+                chunk_texts[batch_start:batch_end],
+                chunk_embs[batch_start:batch_end],
+            ):
+                node_id = str(hash_id)
+                node_text = None if text is None else str(text)
+                metadata: Dict[str, Any] = {"hash_id": node_id, "node_type": "Chunk"}
+                if keep_source_reference:
+                    metadata["_source_path"] = str(src)
+                    metadata["_source_style"] = "hipporag"
+                emb_val = emb if load_embeddings else None
+                graph.add_node(
+                    NodeRecord(
+                        id=node_id,
+                        type="Chunk",
+                        text=node_text,
+                        embedding=emb_val,
+                        metadata=metadata,
+                    )
+                )
+                # Buffer for ChromaDB upsert
+                if node_col is not None and emb_val is not None:
+                    emb_list = emb_val.tolist() if hasattr(emb_val, "tolist") else list(emb_val)
+                    node_ids.append(node_id)
+                    node_embs.append(emb_list)
+                    node_docs.append(node_text or "")
+                    node_metas.append(dict(metadata))
+                    if len(node_ids) >= batch_size:
+                        _flush_upsert(node_col, node_ids, node_embs, node_docs, node_metas)
 
         edge_key_to_index: Dict[Tuple[str, str, str], int] = {}
         fact_relation_by_node_ids: Dict[Tuple[str, str], str] = {}
 
+        # Add chunk -> entity links from OpenIE extracted_entities.
+        for chunk_id, entity_names in openie_chunk_entities.items():
+            if chunk_id not in graph.nodes:
+                continue
+
+            for entity_name in entity_names:
+                entity_key = _normalize_text_key(entity_name)
+                if not entity_key:
+                    continue
+
+                entity_id = (
+                    entity_text_to_ids[entity_key][0]
+                    if entity_key in entity_text_to_ids
+                    else _entity_hash_id(entity_key)
+                )
+
+                if entity_id not in graph.nodes:
+                    metadata = {
+                        "hash_id": entity_id,
+                        "inferred_from_openie_entity": True,
+                    }
+                    if keep_source_reference:
+                        metadata["_source_path"] = str(src)
+                        metadata["_source_style"] = "hipporag"
+                    graph.add_node(
+                        NodeRecord(
+                            id=entity_id,
+                            type="Entity",
+                            text=entity_name,
+                            embedding=None,
+                            metadata=metadata,
+                        )
+                    )
+                    entity_text_to_ids.setdefault(entity_key, []).append(entity_id)
+
+                chunk_to_entity_key = (chunk_id, entity_id, "mentions")
+                if chunk_to_entity_key not in edge_key_to_index:
+                    graph.add_edge(
+                        EdgeRecord(
+                            source=chunk_id,
+                            target=entity_id,
+                            relation="mentions",
+                            weight=1.0,
+                            metadata={
+                                "source": "openie",
+                                "openie_passage_id": chunk_id,
+                            },
+                        )
+                    )
+                    edge_key_to_index[chunk_to_entity_key] = len(graph.edges) - 1
+
+                entity_to_chunk_key = (entity_id, chunk_id, "mentioned_in")
+                if entity_to_chunk_key in edge_key_to_index:
+                    continue
+
+                graph.add_edge(
+                    EdgeRecord(
+                        source=entity_id,
+                        target=chunk_id,
+                        relation="mentioned_in",
+                        weight=1.0,
+                        metadata={
+                            "source": "openie",
+                            "openie_passage_id": chunk_id,
+                        },
+                    )
+                )
+                edge_key_to_index[entity_to_chunk_key] = len(graph.edges) - 1
+
         # ------------------------------------------------------------------ #
-        # 4.5 Build nodes/edges directly from OpenIE triples                   #
+        # 5. Add fact edges from vdb_fact.parquet (with edge embedding upsert)#
         # ------------------------------------------------------------------ #
-        if resolved_openie is not None:
-            for head, rel, tail, passage_id, passage_text in _iter_openie_triples(resolved_openie):
+        fact_total = len(fact_ids)
+        for batch_start in tqdm(
+            range(0, max(fact_total, 1), batch_size),
+            desc="Loading fact edges",
+            unit="batch",
+        ):
+            batch_end = min(batch_start + batch_size, fact_total)
+            for fact_id, fact_content, fact_emb in zip(
+                fact_ids[batch_start:batch_end],
+                fact_texts[batch_start:batch_end],
+                fact_embs[batch_start:batch_end],
+            ):
+                triple = _parse_fact_triple(fact_content)
+                if triple is None:
+                    continue
+
+                head, relation, tail = triple
                 head_key = _normalize_text_key(head)
                 tail_key = _normalize_text_key(tail)
                 if not head_key or not tail_key:
                     continue
 
-                source_id = _entity_hash_id(head_key)
-                target_id = _entity_hash_id(tail_key)
+                source_id = (
+                    entity_text_to_ids[head_key][0]
+                    if head_key in entity_text_to_ids
+                    else _entity_hash_id(head_key)
+                )
+                target_id = (
+                    entity_text_to_ids[tail_key][0]
+                    if tail_key in entity_text_to_ids
+                    else _entity_hash_id(tail_key)
+                )
 
                 if source_id not in graph.nodes:
                     metadata: Dict[str, Any] = {
-                        "inferred_from_openie": True,
-                        "original_label": source_id,
+                        "hash_id": source_id,
+                        "inferred_from_fact": True,
                     }
-                    if passage_id:
-                        metadata["openie_passage_id"] = str(passage_id)
-                    if passage_text:
-                        metadata["passage"] = passage_text
                     if keep_source_reference:
                         metadata["_source_path"] = str(src)
                         metadata["_source_style"] = "hipporag"
@@ -255,7 +579,7 @@ class HippoRAGAdapter(GraphAdapter):
                         NodeRecord(
                             id=source_id,
                             type="Entity",
-                            text=head,
+                            text=head_key,
                             embedding=None,
                             metadata=metadata,
                         )
@@ -264,13 +588,9 @@ class HippoRAGAdapter(GraphAdapter):
 
                 if target_id not in graph.nodes:
                     metadata = {
-                        "inferred_from_openie": True,
-                        "original_label": target_id,
+                        "hash_id": target_id,
+                        "inferred_from_fact": True,
                     }
-                    if passage_id:
-                        metadata["openie_passage_id"] = str(passage_id)
-                    if passage_text:
-                        metadata["passage"] = passage_text
                     if keep_source_reference:
                         metadata["_source_path"] = str(src)
                         metadata["_source_style"] = "hipporag"
@@ -278,20 +598,19 @@ class HippoRAGAdapter(GraphAdapter):
                         NodeRecord(
                             id=target_id,
                             type="Entity",
-                            text=tail,
+                            text=tail_key,
                             embedding=None,
                             metadata=metadata,
                         )
                     )
                     entity_text_to_ids.setdefault(tail_key, []).append(target_id)
 
-                relation_text = str(rel).strip() if rel is not None else ""
-                if not relation_text:
-                    relation_text = "related"
+                relation_text = str(relation).strip() if relation is not None else ""
 
                 edge_key = (source_id, target_id, relation_text)
                 if edge_key in edge_key_to_index:
                     continue
+
                 graph.add_edge(
                     EdgeRecord(
                         source=source_id,
@@ -299,16 +618,31 @@ class HippoRAGAdapter(GraphAdapter):
                         relation=relation_text,
                         weight=1.0,
                         metadata={
-                            "source": "openie",
-                            "passage": passage_text,
-                            "openie_passage_id": str(passage_id) if passage_id else None,
+                            "source": "vdb_fact",
+                            "fact_hash_id": str(fact_id),
                         },
                     )
                 )
                 edge_key_to_index[edge_key] = len(graph.edges) - 1
-                openie_seeded = True
+                fact_relation_by_node_ids.setdefault((source_id, target_id), relation_text)
 
-        # Guard: if OpenIE produced no nodes, surface igraph vertices
+                # Buffer fact embedding for edge_col upsert
+                if edge_col is not None and load_embeddings and fact_emb is not None:
+                    emb_list = fact_emb.tolist() if hasattr(fact_emb, "tolist") else list(fact_emb)
+                    edge_ids.append(str(fact_id))
+                    edge_embs.append(emb_list)
+                    edge_docs.append(str(fact_content) if fact_content is not None else "")
+                    edge_metas.append({
+                        "source": source_id,
+                        "target": target_id,
+                        "relation": relation_text,
+                        "fact_hash_id": str(fact_id),
+                    })
+                    if len(edge_ids) >= batch_size:
+                        _flush_upsert(edge_col, edge_ids, edge_embs, edge_docs, edge_metas)
+
+
+        # Guard: if no nodes were loaded from parquet, surface igraph vertices
         if ig_graph is not None and not graph.nodes and ig_graph.vcount() > 0:
             for v in ig_graph.vs:
                 vid = v["name"] if "name" in v.attributes() else str(v.index)
@@ -330,7 +664,7 @@ class HippoRAGAdapter(GraphAdapter):
         # ------------------------------------------------------------------ #
         # 6. Add edges from igraph (topology + weight)                         #
         # ------------------------------------------------------------------ #
-        if ig_graph is not None and graph.nodes and not openie_only:
+        if ig_graph is not None:
             for edge in ig_graph.es:
                 src_v = ig_graph.vs[edge.source]
                 tgt_v = ig_graph.vs[edge.target]
@@ -344,22 +678,13 @@ class HippoRAGAdapter(GraphAdapter):
 
                 relation = fact_relation_by_node_ids.get((src_id, tgt_id))
                 if relation is None:
-                    src_label = ""
-                    tgt_label = ""
-                    if src_id in graph.nodes:
-                        src_label = graph.nodes[src_id].metadata.get("entity_name") or graph.nodes[src_id].text or ""
-                    if tgt_id in graph.nodes:
-                        tgt_label = graph.nodes[tgt_id].metadata.get("entity_name") or graph.nodes[tgt_id].text or ""
-                    src_text_key = _normalize_text_key(src_label)
-                    tgt_text_key = _normalize_text_key(tgt_label)
+                    src_text_key = _normalize_text_key(
+                        graph.nodes[src_id].text if src_id in graph.nodes else ""
+                    )
+                    tgt_text_key = _normalize_text_key(
+                        graph.nodes[tgt_id].text if tgt_id in graph.nodes else ""
+                    )
                     relation = triple_relation_map.get((src_text_key, tgt_text_key), "related")
-                passage_text = None
-                if src_id in graph.nodes and tgt_id in graph.nodes:
-                    src_label = graph.nodes[src_id].metadata.get("entity_name") or ""
-                    tgt_label = graph.nodes[tgt_id].metadata.get("entity_name") or ""
-                    src_key = _normalize_text_key(src_label)
-                    tgt_key = _normalize_text_key(tgt_label)
-                    passage_text = edge_passage_map.get((src_key, tgt_key))
 
                 edge_key = (src_id, tgt_id, relation)
                 if edge_key in edge_key_to_index:
@@ -374,13 +699,34 @@ class HippoRAGAdapter(GraphAdapter):
                         target=tgt_id,
                         relation=relation,
                         weight=weight,
-                        metadata={
-                            "source": "igraph",
-                            "passage": passage_text,
-                        },
+                        metadata={"source": "igraph"},
                     )
                 )
                 edge_key_to_index[edge_key] = len(graph.edges) - 1
+
+        # ------------------------------------------------------------------ #
+        # 7. Flush remaining buffered upserts and attach vector indices        #
+        # ------------------------------------------------------------------ #
+        if node_col is not None:
+            _flush_upsert(node_col, node_ids, node_embs, node_docs, node_metas)
+            graph.attach_index(
+                "node_vector",
+                ChromaCollectionIndexer(
+                    node_col,
+                    persist_path=db_path,
+                    distance_metric=str(distance_metric),
+                ),
+            )
+        if edge_col is not None:
+            _flush_upsert(edge_col, edge_ids, edge_embs, edge_docs, edge_metas)
+            graph.attach_index(
+                "edge_vector",
+                ChromaCollectionIndexer(
+                    edge_col,
+                    persist_path=db_path,
+                    distance_metric=str(distance_metric),
+                ),
+            )
 
         return graph
 
@@ -457,6 +803,7 @@ def import_graph_from_hipporag(
     container: Optional[SimpleGraphContainer] = None,
     keep_source_reference: bool = False,
     load_embeddings: bool = True,
+    attach_index: Optional[bool] = None,
     openie_path: Optional[str] = None,
     **kwargs: Any,
 ) -> SearchableGraphContainer:
@@ -469,6 +816,9 @@ def import_graph_from_hipporag(
         keep_source_reference: Store ``_source_path``/``_source_style`` on
             every node.
         load_embeddings: Load stored embedding vectors into nodes.
+        attach_index: If True, upserts embeddings into ChromaDB and attaches a
+            ``node_vector`` index for FastInsight retrieval.  Defaults to the
+            ``HIPPORAG_ATTACH_INDEX`` env-var (True when unset).
         openie_path: Explicit path to ``openie_results_ner_*.json``.
             Auto-detected from the parent directory when omitted.
     """
@@ -477,6 +827,7 @@ def import_graph_from_hipporag(
         container=container,
         keep_source_reference=keep_source_reference,
         load_embeddings=load_embeddings,
+        attach_index=attach_index,
         openie_path=openie_path,
         **kwargs,
     )

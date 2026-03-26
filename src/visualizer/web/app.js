@@ -27,6 +27,7 @@
   const replaySlider = document.getElementById("debug-replay-slider");
   const replayLiveBtn = document.getElementById("debug-replay-live");
   const replayStatusEl = document.getElementById("debug-replay-status");
+  const replayPhysicsBtn = document.getElementById("debug-physics-toggle");
 
   const chatGraphSelect = document.getElementById("chat-graph-select");
   const chatModelSelect = document.getElementById("chat-model-select");
@@ -52,6 +53,7 @@
   const importDatasetGroup = document.getElementById("import-dataset-group");
   const importStatus = document.getElementById("import-status");
   const importFastInsightWarning = document.getElementById("import-fastinsight-warning");
+  const importFileRequirements = document.getElementById("import-file-requirements");
   const importProgressFill = document.getElementById("import-progress-fill");
   const importProgressLabel = document.getElementById("import-progress-label");
 
@@ -234,6 +236,7 @@
   const sessionReplayHistory = new Map();
   const replayCursorBySession = new Map();
   let chatMessageSeq = 0;
+  let physicsEnabled = true;
 
   function getCssVar(name, fallback = "") {
     const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -369,7 +372,11 @@
   }
 
   function clearGraph() {
-    network.setOptions({ physics: { enabled: true } });
+    network.setOptions({
+      physics: {
+        enabled: physicsEnabled,
+      },
+    });
     nodes.clear();
     edges.clear();
   }
@@ -395,12 +402,35 @@
   function restartPhysics() {
     network.setOptions({
       physics: {
-        enabled: true,
+        enabled: physicsEnabled,
       },
     });
+    if (!physicsEnabled) return;
     if (typeof network.startSimulation === "function") {
       network.startSimulation();
     }
+  }
+
+  function setPhysicsEnabled(nextEnabled) {
+    physicsEnabled = Boolean(nextEnabled);
+    network.setOptions({
+      physics: {
+        enabled: physicsEnabled,
+      },
+    });
+
+    if (physicsEnabled) {
+      if (typeof network.startSimulation === "function") {
+        network.startSimulation();
+      }
+    } else if (typeof network.stopSimulation === "function") {
+      network.stopSimulation();
+    }
+
+    if (replayPhysicsBtn) {
+      replayPhysicsBtn.textContent = physicsEnabled ? "Pause Physics" : "Resume Physics";
+    }
+    network.redraw();
   }
 
   function applySubgraph(payload, { incremental = false } = {}) {
@@ -413,7 +443,7 @@
         nodes.add(
           nextNodes.map((node) =>
             styleNodeByRetrieval(node, {
-              physics: true,
+              physics: physicsEnabled,
             })
           )
         );
@@ -430,15 +460,36 @@
     const nextEdgeIdSet = new Set(nextEdges.map((edge) => edge.id));
     const currentPositions = currentNodeIds.length ? network.getPositions(currentNodeIds) : {};
 
+    let anchorX = 0;
+    let anchorY = 0;
+    let anchorCount = 0;
+    for (const pos of Object.values(currentPositions)) {
+      if (!pos) continue;
+      if (!Number.isFinite(pos.x) || !Number.isFinite(pos.y)) continue;
+      anchorX += pos.x;
+      anchorY += pos.y;
+      anchorCount += 1;
+    }
+    const anchor =
+      anchorCount > 0 ? { x: anchorX / anchorCount, y: anchorY / anchorCount } : null;
+
     const patchedNodes = nextNodes.map((node) => {
-      if (currentNodeIdSet.has(node.id) && currentPositions[node.id]) {
+      const knownPos = currentPositions[node.id];
+      if (knownPos && Number.isFinite(knownPos.x) && Number.isFinite(knownPos.y)) {
         return styleNodeByRetrieval(node, {
-          x: currentPositions[node.id].x,
-          y: currentPositions[node.id].y,
-          physics: true,
+          x: knownPos.x,
+          y: knownPos.y,
+          physics: physicsEnabled,
         });
       }
-      return styleNodeByRetrieval(node, { physics: true });
+      if (anchor) {
+        return styleNodeByRetrieval(node, {
+          x: anchor.x,
+          y: anchor.y,
+          physics: physicsEnabled,
+        });
+      }
+      return styleNodeByRetrieval(node, { physics: physicsEnabled });
     });
 
     const removedNodeIds = currentNodeIds.filter((id) => !nextNodeIdSet.has(id));
@@ -448,7 +499,14 @@
 
     if (patchedNodes.length) nodes.update(patchedNodes);
     if (nextEdges.length) edges.update(nextEdges);
-    restartPhysics();
+
+    const hasNewNode = patchedNodes.some((node) => !currentNodeIdSet.has(node.id));
+    const hasRemovedNode = removedNodeIds.length > 0;
+    const hasRemovedEdge = removedEdgeIds.length > 0;
+    const hasNewEdge = nextEdges.some((edge) => !currentEdgeIds.includes(edge.id));
+    if (hasNewNode || hasRemovedNode || hasRemovedEdge || hasNewEdge) {
+      restartPhysics();
+    }
   }
 
   async function fetchSessionSubgraph(sessionId, customHops = hops) {
@@ -480,9 +538,8 @@
     const p = progress || {};
     const step = getProgressStep(p);
     progressFill.style.width = step > 0 ? "100%" : "0%";
-    progressText.innerHTML = `<span style="color:var(--accent-color); font-weight:bold;">Step ${
-      step || 0
-    }</span> - ${p.message || "Processing"}`;
+    progressText.innerHTML = `<span style="color:var(--accent-color); font-weight:bold;">Step ${step || 0
+      }</span> - ${p.message || "Processing"}`;
   }
 
   function cloneReplayView(view) {
@@ -521,6 +578,7 @@
       replaySlider.max = "0";
       replaySlider.value = "0";
       if (replayLiveBtn) replayLiveBtn.disabled = true;
+      if (replayPhysicsBtn) replayPhysicsBtn.disabled = true;
       setReplayStatusText("No replay snapshots");
       return;
     }
@@ -532,6 +590,7 @@
       replaySlider.max = "0";
       replaySlider.value = "0";
       if (replayLiveBtn) replayLiveBtn.disabled = true;
+      if (replayPhysicsBtn) replayPhysicsBtn.disabled = true;
       setReplayStatusText("No replay snapshots");
       return;
     }
@@ -560,6 +619,7 @@
     replaySlider.max = String(maxIndex);
     replaySlider.value = String(effectiveIndex);
     if (replayLiveBtn) replayLiveBtn.disabled = cursor === null;
+    if (replayPhysicsBtn) replayPhysicsBtn.disabled = false;
 
     setReplayStatusText(
       `${mode} ${effectiveIndex + 1}/${history.length} · Step ${step} · ${message}`
@@ -627,7 +687,7 @@
     const entry = history[safeIndex];
     if (!entry || !entry.view) return;
 
-    applySubgraph(entry.view, { incremental: false });
+    applySubgraph(entry.view, { incremental: true });
     applyGhostStyleToVisibleNodes();
     updateProgressBar(entry.view.progress);
 
@@ -1173,21 +1233,21 @@
     if (!chatRetrievalWarning || !chatRetrievalWarningText) return;
     const targetSession = session || getActiveChatSession();
     const retrieval = String(
-      (targetSession && targetSession.retrieval) ||
       (chatRetrievalSelect && chatRetrievalSelect.value) ||
+      (targetSession && targetSession.retrieval) ||
       ""
     )
       .trim()
       .toLowerCase();
     const graphName = String(
-      (targetSession && targetSession.graph) ||
       (chatGraphSelect && chatGraphSelect.value) ||
+      (targetSession && targetSession.graph) ||
       ""
     ).trim();
     const capability = graphCapabilitiesByName.get(graphName) || null;
     const shouldWarn =
       retrieval === "fastinsight" &&
-      (!capability || capability.graphType !== "fastinsight" || !capability.hasNodeVectorIndex);
+      (!capability || !capability.hasNodeVectorIndex);
 
     if (!shouldWarn) {
       chatRetrievalWarning.classList.add("hidden");
@@ -1196,7 +1256,7 @@
     }
 
     chatRetrievalWarningText.textContent =
-      "FastInsight requires a dense vector index (`node_vector`). This graph does not provide one. Choose One-Hop/Vector, or switch to a graph with a dense index.";
+      "Component graph requires a dense vector index (`node_vector`). This graph does not provide one. Choose One-Hop/Vector, or switch to a graph with a dense index.";
     chatRetrievalWarning.classList.remove("hidden");
     chatRetrievalWarning.setAttribute("aria-hidden", "false");
   }
@@ -1417,7 +1477,7 @@
       title: "New Graph Chat",
       graph: (chatGraphSelect && chatGraphSelect.value) || "default",
       model: (chatModelSelect && chatModelSelect.value) || "gpt-5-nano",
-      embedding: (chatEmbeddingSelect && chatEmbeddingSelect.value) || "bge:BAAI/bge-m3",
+      embedding: (chatEmbeddingSelect && chatEmbeddingSelect.value) || "openai:text-embedding-3-small",
       retrieval: (chatRetrievalSelect && chatRetrievalSelect.value) || "one-hop",
       updatedAt: Date.now(),
       messages: [],
@@ -1744,6 +1804,7 @@
       chatGraphSelect.onchange = async () => {
         const name = chatGraphSelect.value;
         updateActiveChatSetting("graph", name);
+        updateFastInsightWarning();
         // Tell the server to switch the active graph (topology + RAG backend)
         try {
           await fetch("/api/graph/switch", {
@@ -1764,8 +1825,10 @@
         updateActiveChatSetting("embedding", chatEmbeddingSelect.value);
     }
     if (chatRetrievalSelect) {
-      chatRetrievalSelect.onchange = () =>
+      chatRetrievalSelect.onchange = () => {
         updateActiveChatSetting("retrieval", chatRetrievalSelect.value);
+        updateFastInsightWarning();
+      };
     }
 
     if (chatSendBtn) {
@@ -1955,12 +2018,25 @@
     modeImportBtn.onclick = () => setMode("import");
   }
 
+  const importRequirementsByAdapter = {
+    lightrag: "Required: vdb_entities.json, vdb_relationships.json",
+    hipporag: "Required: graph.pickle · entity_embeddings/vdb_entity.parquet · chunk_embeddings/vdb_chunk.parquet · fact_embeddings/vdb_fact.parquet · openie_results_ner_*.json (in parent directory)",
+    g_retriever: "Required: nodes/{i}.csv · edges/{i}.csv · graphs/{i}.pt",
+    expla_graphs: "Required: a .tsv file",
+    freebasekg: "Required: Hugging Face dataset name",
+    fastinsight: "Required: nodes.jsonl, edges.jsonl (blocked in import mode)",
+  };
+
+
   function updateImportVisibility() {
     if (!importAdapterSelect || !importFileGroup || !importDatasetGroup) return;
     const adapter = importAdapterSelect.value;
     const isFreebase = adapter === "freebasekg";
     importFileGroup.classList.toggle("hidden", isFreebase);
     importDatasetGroup.classList.toggle("hidden", !isFreebase);
+    if (importFileRequirements) {
+      importFileRequirements.textContent = importRequirementsByAdapter[adapter] + "\nUpload all of your necessary graph files for the graph type in .zip file.";
+    }
     if (importFastInsightWarning) {
       importFastInsightWarning.classList.remove("hidden");
       importFastInsightWarning.setAttribute("aria-hidden", "false");
@@ -1985,14 +2061,12 @@
       if (adapter === "fastinsight") {
         if (importStatus) {
           importStatus.textContent =
-            "FastInsight requires a dense vector index (`node_vector`). This graph does not provide one. Choose One-Hop/Vector, or switch to a graph with a dense index.";
+            "Component graph requires a dense vector index (`node_vector`). This graph does not provide one. Choose One-Hop/Vector, or switch to a graph with a dense index.";
         }
         return;
       }
-      const label = `${adapter}:${datasetName}`;
       const formData = new FormData();
       formData.append("adapter", adapter);
-      formData.append("label", label);
       formData.append("dataset_name", datasetName);
 
       if (adapter === "freebasekg") {
@@ -2071,7 +2145,7 @@
       if (!history.length) return;
       const targetIndex = Math.max(0, Math.min(history.length - 1, Number(replaySlider.value || 0)));
       if (targetIndex >= history.length - 1) {
-        showLatestReplay(currentSession, { incremental: false });
+        showLatestReplay(currentSession, { incremental: true });
         return;
       }
       replayCursorBySession.set(currentSession, targetIndex);
@@ -2079,15 +2153,63 @@
     });
   }
 
+  function seekReplayStep(delta) {
+    if (!currentSession) return;
+    const history = getReplayHistory(currentSession);
+    if (!history.length || history.length <= 1) return;
+
+    const maxIndex = history.length - 1;
+    const cursor = getReplayCursor(currentSession);
+    let currentIndex = cursor === null ? maxIndex : Number(cursor);
+    if (!Number.isFinite(currentIndex)) currentIndex = maxIndex;
+    currentIndex = Math.max(0, Math.min(maxIndex, Math.trunc(currentIndex)));
+
+    const nextIndex = currentIndex + Number(delta);
+    if (nextIndex <= 0) {
+      replayCursorBySession.set(currentSession, 0);
+      applyReplayEntry(currentSession, 0);
+      return;
+    }
+
+    if (nextIndex >= maxIndex) {
+      replayCursorBySession.delete(currentSession);
+      showLatestReplay(currentSession, { incremental: true });
+      return;
+    }
+
+    replayCursorBySession.set(currentSession, nextIndex);
+    applyReplayEntry(currentSession, nextIndex);
+  }
+
+  document.addEventListener("keydown", (event) => {
+    if (currentMode !== "debug") return;
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    const active = document.activeElement;
+    if (active && ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName)) return;
+    if (active && active.isContentEditable) return;
+    if (event.isComposing) return;
+
+    event.preventDefault();
+    const delta = event.key === "ArrowLeft" ? -1 : 1;
+    seekReplayStep(delta);
+  });
+
   if (replayLiveBtn) {
     replayLiveBtn.onclick = () => {
       if (!currentSession) return;
-      showLatestReplay(currentSession, { incremental: false });
+      showLatestReplay(currentSession, { incremental: true });
+    };
+  }
+
+  if (replayPhysicsBtn) {
+    replayPhysicsBtn.onclick = () => {
+      setPhysicsEnabled(!physicsEnabled);
     };
   }
 
   initTheme();
   initChatUi();
+  setPhysicsEnabled(true);
   clearGraph();
   syncReplayControls("");
   setMode("chat");

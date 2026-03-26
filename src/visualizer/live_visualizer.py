@@ -37,6 +37,32 @@ def _default_edge_style() -> Dict[str, Any]:
     return {"width": 3}
 
 
+_CURRENT_STEP_EDGE_COLOR = {"color": "#1565c0", "highlight": "#1565c0"}
+_PREVIOUS_STEP_EDGE_COLOR = {"color": "#4caf50", "highlight": "#4caf50"}
+
+
+def _is_current_step_edge_style(style: Dict[str, Any]) -> bool:
+    color = style.get("color")
+    if not isinstance(color, dict):
+        return False
+    return str(color.get("color", "")).strip().lower() == "#1565c0"
+
+
+def _node_retrieval_stage(style: Dict[str, Any]) -> str:
+    if not isinstance(style, dict):
+        return ""
+    color = style.get("color")
+    if not isinstance(color, dict):
+        return ""
+    border = str(color.get("border", "")).strip().lower()
+    background = str(color.get("background", "")).strip().lower()
+    if border == "#1565c0" or background == "#bbdefb":
+        return "current"
+    if border == "#4caf50" or background == "#c8e6c9":
+        return "previous"
+    return ""
+
+
 @dataclass
 class _SessionState:
     created_at: float = field(default_factory=time.time)
@@ -244,9 +270,16 @@ class LiveGraphVisualizer:
             node = self.container.get_node(node_id)
             if node is None:
                 continue
+            is_lightrag = node.metadata.get("_source_style") == "lightrag"
+            lightrag_label = node.metadata.get("entity_name") if is_lightrag else None
+            if lightrag_label:
+                label_text = str(lightrag_label)
+            else:
+                show_text_label = "original_label" in node.metadata and bool(node.text)
+                label_text = node.text if show_text_label else node.id
             payload: Dict[str, Any] = {
                 "id": node.id,
-                "label": node.id,
+                "label": label_text,
                 "group": node.type,
                 "title": node.id,
                 "node_type": node.type,
@@ -267,13 +300,17 @@ class LiveGraphVisualizer:
             edge = self.container.edges[edge_idx]
             if edge.source not in selected or edge.target not in selected:
                 continue
-            relation = edge.relation or "RELATED"
+            relation = "" if edge.relation is None else str(edge.relation)
             payload = {
                 "id": f"g:{edge_idx}",
                 "from": edge.source,
                 "to": edge.target,
                 "label": relation,
-                "title": f"relation={relation}, weight={edge.weight}",
+                "title": (
+                    f"relation={relation}, weight={edge.weight}"
+                    if relation
+                    else f"weight={edge.weight}"
+                ),
                 "arrows": "to",
                 "relation": relation,
             }
@@ -281,6 +318,17 @@ class LiveGraphVisualizer:
             overlay_edge = state.edges.get(overlay_key)
             if overlay_edge is not None:
                 payload.update(dict(overlay_edge.get("style", {})))
+            else:
+                source_overlay = state.nodes.get(edge.source, {})
+                target_overlay = state.nodes.get(edge.target, {})
+                source_stage = _node_retrieval_stage(source_overlay.get("style", {}))
+                target_stage = _node_retrieval_stage(target_overlay.get("style", {}))
+                if source_stage and target_stage and (
+                    source_stage == "current" or target_stage == "current"
+                ):
+                    payload.update({"color": dict(_CURRENT_STEP_EDGE_COLOR), "width": 3})
+                elif source_stage and target_stage:
+                    payload.update({"color": dict(_PREVIOUS_STEP_EDGE_COLOR), "width": 3})
             edge_payloads.append(payload)
 
         return {
@@ -432,6 +480,12 @@ class LiveGraphVisualizer:
                     raise TypeError("nodes must contain str or dict items.")
                 state.nodes[node_id] = {"id": node_id, "style": style}
 
+            if edges is not None:
+                for edge_info in state.edges.values():
+                    edge_style = edge_info.get("style", {})
+                    if isinstance(edge_style, dict) and _is_current_step_edge_style(edge_style):
+                        edge_style["color"] = dict(_PREVIOUS_STEP_EDGE_COLOR)
+
             for edge in edges or []:
                 source: str
                 target: str
@@ -449,8 +503,6 @@ class LiveGraphVisualizer:
                     target = str(edge["target"])
                     relation = str(edge.get("relation", "RELATED"))
                     edge_style = dict(edge.get("style", {}))
-                    # Do not allow session overlay to override edge color.
-                    edge_style.pop("color", None)
                     style.update(edge_style)
                 else:
                     raise TypeError("edges must contain tuple/list or dict items.")
@@ -964,9 +1016,12 @@ class LiveGraphVisualizer:
                                     zf.extractall(temp_dir)
                                 zip_path.unlink(missing_ok=True)
 
-                            children = [p for p in temp_dir.iterdir() if p.name != ".DS_Store"]
-                            if len(children) == 1 and children[0].is_dir():
-                                source_path = children[0]
+                            while True:
+                                children = [p for p in source_path.iterdir() if p.name not in (".DS_Store", "__MACOSX")]
+                                if len(children) == 1 and children[0].is_dir():
+                                    source_path = children[0]
+                                else:
+                                    break
 
                         if adapter_key == "hipporag":
                             resolved_root, error = _resolve_hipporag_root(source_path)
@@ -1432,17 +1487,14 @@ _ADAPTER_IMPORTERS: Dict[str, str] = {
     "g_retriever": "..adapters.g_retriever.import_graph_from_g_retriever",
     "expla_graphs": "..adapters.expla_graphs.import_graph_from_expla_graphs",
     "freebasekg": "..adapters.freebasekg.import_graph_from_freebasekg",
-    "tog": "..adapters.tog.import_graph_from_tog",
 }
 
 _ADAPTER_DEFAULT_LABELS: Dict[str, str] = {
-    "fastinsight": "FastInsight",
-    "lightrag": "LightRAG",
-    "hipporag": "HippoRAG",
-    "g_retriever": "G-Retriever",
-    "expla_graphs": "ExplaGraphs",
-    "freebasekg": "FreebaseKG",
-    "tog": "Think-on-Graph",
+    "fastinsight": "Component",
+    "lightrag": "Attribute Bundle",
+    "hipporag": "Topology-Semantic",
+    "g_retriever": "Subgraph Union",
+    "expla_graphs": "Triplet Sequence",
 }
 
 
@@ -1517,52 +1569,43 @@ def _validate_import_requirements(
     *,
     dataset_name: str = "",
 ) -> Optional[str]:
-    if adapter_key == "freebasekg":
-        if not dataset_name.strip():
-            return "Hugging Face dataset name is required for FreebaseKG."
-        return None
+    importer_path = _ADAPTER_IMPORTERS.get(adapter_key)
+    if importer_path is None:
+        return f"Unknown adapter key: {adapter_key}"
 
-    src = Path(source_path)
-    if adapter_key == "fastinsight":
-        if not (src / "nodes.jsonl").exists() or not (src / "edges.jsonl").exists():
-            return "FastInsight requires nodes.jsonl and edges.jsonl."
-        return None
+    # Standard requirements strings for error messages
+    requirements_msg = {
+        "fastinsight": "Requires nodes.jsonl and edges.jsonl.",
+        "lightrag": "Requires vdb_entities.json and vdb_relationships.json.",
+        "hipporag": "Requires graph.pickle, entity_embeddings, chunk_embeddings, fact_embeddings, and openie_results_ner_*.json.",
+        "g_retriever": "Requires nodes/{i}.csv, edges/{i}.csv, and graphs/{i}.pt files for each query i.",
+        "expla_graphs": "Requires a .tsv file.",
+        "freebasekg": "Requires a Hugging Face dataset name (e.g. 'rmanluo/RoG-webqsp').",
+    }
 
-    if adapter_key == "lightrag":
-        if not (src / "vdb_entities.json").exists() or not (src / "vdb_relationships.json").exists():
-            return "LightRAG requires vdb_entities.json and vdb_relationships.json."
-        return None
+    try:
+        # Import the adapter class
+        module_path, _ = importer_path.rsplit(".", 1)
+        mod = importlib.import_module(module_path, package=__name__.rsplit(".", 1)[0])
 
-    if adapter_key == "hipporag":
-        resolved, error = _resolve_hipporag_root(src)
-        if error:
-            return error
-        has_graph = (resolved / "graph.pickle").exists()
-        has_openie = any(p.is_file() for p in resolved.glob("openie_results_ner_*.json"))
-        if not has_graph or not has_openie:
-            return "HippoRAG requires graph.pickle and openie_results_ner_*.json."
-        return None
+        adapter_class_map = {
+            "fastinsight": "FastInsightAdapter",
+            "lightrag": "LightRAGAdapter",
+            "hipporag": "HippoRAGAdapter",
+            "g_retriever": "GRetrieverAdapter",
+            "expla_graphs": "ExplaGraphsAdapter",
+            "freebasekg": "FreebaseKGAdapter",
+        }
+        classname = adapter_class_map.get(adapter_key)
 
-    if adapter_key == "g_retriever":
-        nodes_dir = src / "nodes"
-        edges_dir = src / "edges"
-        node_files = [p for p in nodes_dir.glob("*.csv") if p.is_file()]
-        edge_files = [p for p in edges_dir.glob("*.csv") if p.is_file()]
-        if not node_files or not edge_files:
-            return "G-Retriever requires nodes/{i}.csv and edges/{i}.csv inside a folder or zip."
-        node_ids = {p.stem for p in node_files}
-        edge_ids = {p.stem for p in edge_files}
-        if not (node_ids & edge_ids):
-            return "G-Retriever requires matching nodes/{i}.csv and edges/{i}.csv pairs."
-        return None
-
-    if adapter_key == "expla_graphs":
-        if src.is_file() and src.suffix.lower() == ".tsv":
-            return None
-        has_tsv = any(p.is_file() and p.suffix.lower() == ".tsv" for p in src.glob("*.tsv"))
-        if not has_tsv:
-            return "ExplaGraphs requires a .tsv file."
-        return None
+        adapter_cls = getattr(mod, classname, None) if classname else None
+        if adapter_cls:
+            adapter = adapter_cls()
+            if not adapter.can_import(source_path):
+                msg = requirements_msg.get(adapter_key, "File requirements not met.")
+                return f"{msg}"
+    except Exception as exc:
+        return f"Validation error for {adapter_key}: {exc}"
 
     return None
 
@@ -1570,7 +1613,7 @@ def _validate_import_requirements(
 def _resolve_hipporag_root(source_path: Union[str, Path]) -> Tuple[Path, Optional[str]]:
     src = Path(source_path)
     has_graph = (src / "graph.pickle").exists()
-    has_openie = any(p.is_file() for p in src.glob("openie_results_ner_*.json"))
+    has_openie = any(p.is_file() for p in src.glob("openie_results_ner_*.json")) or any(p.is_file() for p in src.parent.glob("openie_results_ner_*.json"))
     if has_graph and has_openie:
         return src, None
 
@@ -1578,7 +1621,8 @@ def _resolve_hipporag_root(source_path: Union[str, Path]) -> Tuple[Path, Optiona
     try:
         for graph_path in src.rglob("graph.pickle"):
             parent = graph_path.parent
-            if any(p.is_file() for p in parent.glob("openie_results_ner_*.json")):
+            # Check for openie in the same dir OR the parent of the graph.pickle dir.
+            if any(p.is_file() for p in parent.glob("openie_results_ner_*.json")) or any(p.is_file() for p in parent.parent.glob("openie_results_ner_*.json")):
                 candidates.append(parent)
     except Exception:
         return src, None
@@ -1587,7 +1631,7 @@ def _resolve_hipporag_root(source_path: Union[str, Path]) -> Tuple[Path, Optiona
         return candidates[0], None
     if len(candidates) > 1:
         preview = ", ".join(str(p) for p in candidates[:3])
-        return src, f"Multiple HippoRAG roots found. Please zip a single root. Examples: {preview}"
+        return src, f"Multiple Topology-Semantic graph roots found. Please zip a single root. Examples: {preview}"
     return src, None
 
 

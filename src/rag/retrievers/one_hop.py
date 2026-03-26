@@ -133,7 +133,7 @@ class OneHopRetriever(BaseRetriever):
                     session_id,
                     node_id,
                     style={
-                        "color": {"background": "#c8e6c9", "border": "#4caf50"},
+                        "color": {"background": "#bbdefb", "border": "#1565c0"},
                         "borderWidth": 3,
                     },
                 )
@@ -145,7 +145,10 @@ class OneHopRetriever(BaseRetriever):
                         "source": edge["source"],
                         "target": edge["target"],
                         "relation": edge["relation"],
-                        "style": {"width": 3},
+                        "style": {
+                            "width": 3,
+                            "color": {"color": "#1565c0", "highlight": "#1565c0"},
+                        },
                     } for edge in one_hop_edges
                 ],
                 progress={"message": "Recording one-hop edges"},

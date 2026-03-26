@@ -32,18 +32,19 @@
                 <button id="clear-session" style="width:100%">Clear Session</button>
 
                 <div class="progress-container">
-                    <div id="progress-text" style="font-size: 11px; color: var(--text-dim); margin-bottom:4px;">Ready
+                    <div id="progress-text" style="color: var(--text-dim); margin-bottom:4px;">Ready
                     </div>
                     <div class="progress-wrap">
                         <div id="progress-fill"></div>
                     </div>
-                    <div id="session-status" style="font-size: 10px; color: var(--text-dim); line-height: 1.4;">
+                    <div id="session-status" style="color: var(--text-dim); line-height: 1.4;">
                         No active session
                     </div>
                     <div class="replay-controls">
                         <div class="replay-header">
                             <span>Replay</span>
                             <button id="debug-replay-live" type="button">Live</button>
+                            <button id="debug-physics-toggle" type="button">Pause Physics</button>
                         </div>
                         <input id="debug-replay-slider" type="range" min="0" max="0" step="1" value="0" disabled
                             aria-label="Replay retrieval progress" />
@@ -54,7 +55,7 @@
 
             <div id="sidepanel">
                 <h3>Details</h3>
-                <pre id="node-detail" style="font-size: 11px;">Select a node or edge to inspect its properties.</pre>
+                <pre id="node-detail">Select a node or edge to inspect its properties.</pre>
                 <div class="display-settings">
                     <div class="setting-item">
                         <span>Node Labels</span>
@@ -79,7 +80,7 @@
         </section>
 
         <section id="chat-view" class="mode-view active" aria-hidden="false">
-            <div class="chat-shell" style="padding-top: 56px; padding-bottom: 6px;">
+            <div class="chat-shell">
                 <aside class="chat-sidebar">
                     <div class="chat-history-header">
                         <div class="chat-sidebar-title">Graph Chats</div>
@@ -92,32 +93,32 @@
                     <header class="chat-header" style="padding: 10px 14px 6px;">
                         <div class="chat-header-main">
                             <h2 id="chat-title" contenteditable="true" spellcheck="false" title="Click to rename chat"
-                                style="font-size: 16px; margin: 0 0 2px -4px;">
+                                style="margin: 0 0 2px -4px;">
                                 New Graph Chat
                             </h2>
                             <span class="chat-subtitle" id="chat-subtitle"
-                                style="font-size: 10px; line-height: 1.2;">Query the loaded source graph</span>
+                                style="line-height: 1.2;">Query the loaded source graph</span>
                         </div>
                         <div class="chat-header-controls" style="gap: 6px;">
                             <select id="chat-graph-select" aria-label="Select Graph"
-                                style="padding: 6px 8px; font-size: 11px; min-width: 150px;">
+                                style="padding: 6px 8px; min-width: 150px;">
                                 <!-- populated dynamically from /api/graphs -->
                             </select>
                             <select id="chat-model-select" aria-label="Select Model"
-                                style="padding: 6px 8px; font-size: 11px; min-width: 128px;">
+                                style="padding: 6px 8px; min-width: 128px;">
                                 <option value="gpt-5-nano">Model: gpt-5-nano</option>
                             </select>
                             <select id="chat-embedding-select" aria-label="Select Embedding Model"
-                                style="padding: 6px 8px; font-size: 11px; min-width: 148px;">
+                                style="padding: 6px 8px; min-width: 148px;">
                                 <option value="bge:BAAI/bge-m3">Embedding: BAAI/bge-m3</option>
                                 <option value="openai:text-embedding-3-small">Embedding: OpenAI text-embedding-3-small
                                 </option>
                             </select>
                             <select id="chat-retrieval-select" aria-label="Select Retrieval Method"
-                                style="padding: 6px 8px; font-size: 11px; min-width: 122px;">
-                                <option value="one-hop">RAG: One-Hop</option>
+                                style="padding: 6px 8px; min-width: 122px;">
                                 <option value="vector">RAG: Vector</option>
-                                <option value="hybrid">RAG: Hybrid</option>
+                                <option value="one-hop">RAG: One-Hop</option>
+                                <!-- <option value="hybrid">RAG: Hybrid</option> -->
                                 <option value="fastinsight">RAG: FastInsight</option>
                             </select>
                         </div>
@@ -155,26 +156,17 @@
         <section id="import-view" class="mode-view" aria-hidden="true">
             <div class="import-shell">
                 <div class="import-card">
-                    <h2>Import Graph</h2>
+                    <h3>Import Graph</h3>
                     <p class="import-subtitle">Upload your custom graph files and register them for chat/debug!</p>
                     <form id="import-form">
                         <label for="import-adapter">Graph Type</label>
-                        <div id="import-fastinsight-warning" class="import-info-note" role="status"
-                            aria-live="polite" aria-hidden="false">
-                            <span class="import-info-note-icon" aria-hidden="true">ℹ</span>
-                            <span id="import-fastinsight-warning-text">
-                                FastInsight graph type requires a dense vector index, which is not supported by this Import Mode. 
-                                Choose any other graph type for your custom import.
-                            </span>
-                        </div>
 
                         <select id="import-adapter" required>
-                            <option value="fastinsight" disabled>FastInsight (blocked)</option>
-                            <option value="lightrag">LightRAG</option>
-                            <option value="hipporag">HippoRAG</option>
-                            <option value="g_retriever">G-Retriever (CSV)</option>
-                            <option value="expla_graphs">Expla Graphs (TSV)</option>
-                            <option value="freebasekg">Freebase KG (HF)</option>
+                            <option value="fastinsight" disabled>Component (blocked)</option>
+                            <option value="lightrag">Attribute Bundle</option>
+                            <option value="hipporag">Topology-Semantic</option>
+                            <option value="g_retriever">Subgraph Union</option>
+                            <!-- <option value="expla_graphs">Triplet Sequence</option> -->
                         </select>
 
                         <label for="import-dataset-name">Dataset Name</label>
