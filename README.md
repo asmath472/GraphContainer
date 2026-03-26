@@ -38,19 +38,37 @@ If you prefer another installation method, such as Homebrew, WinGet, Scoop, or `
 uv sync
 ```
 
-Also, you can get example graphs in this [Google Drive link](https://drive.google.com/file/d/1pK8mK2Jgp3T4gVUOuHQrVz2xSpDBIGdV/view?usp=sharing). Place this on the project root directory.
+After installation, restart bash and use the command below to activate the virtual environment.
+
+```bash
+source .venv/bin/activate
+```
+
+Also, you can get example graphs in the below Google Drive link. Place this on the project root directory.
+
+[![Google Drive Graph Data](https://img.shields.io/badge/Google%20Drive-Graph_Data-blue?style=for-the-badge&logo=googledrive&logoColor=white)](https://drive.google.com/file/d/1pK8mK2Jgp3T4gVUOuHQrVz2xSpDBIGdV/view?usp=sharing)
+
+<!-- [Google Drive link](https://drive.google.com/file/d/1pK8mK2Jgp3T4gVUOuHQrVz2xSpDBIGdV/view?usp=sharing). Place this on the project root directory. -->
 
 ### Web-based Visualizer
 
 The web interface is powered by the live visualizer. You can launch it directly from the command line by pointing it to a graph source:
 
-```bash
+<!-- ```bash
 uv run python -m GraphContainer.visualizer.live_visualizer \
   --source data/rag_storage/fastinsight/scifact-openai \
   --host 127.0.0.1 \
   --port 8765 \
   --hops 2
+``` -->
+
+```bash
+python serve.py --graph fastinsight:./data/rag_storage/fastinsight/scifact-openai \
+  --host 127.0.0.1 \
+  --port 8765 \
+  --hops 2
 ```
+
 
 After the server starts, open `http://127.0.0.1:8765` in your browser. The page renders the graph or subgraph associated with the current retrieval session and lets you inspect how the retriever moved through the graph. Nodes and edges selected during retrieval can be highlighted, and the visualizer keeps track of session progress so that a query can be inspected step by step instead of only as a final result.
 
