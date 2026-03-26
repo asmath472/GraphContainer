@@ -1,130 +1,56 @@
-# GraphContainer + Live Visualizer Guide
+## GraphContainer
 
-This document explains how to use `GraphContainer` and its live web visualizer.
+<p align="center">
+  <img src="./graph-container-workflow.png" alt="GraphContainer workflow" width="760">
+</p>
 
-![Conceptual GraphContainer Modules](./graph-container.png)
+**GraphContainer** provides a unified workflow for working with Graph-RAG systems. It is designed to load graphs produced by different methods, convert them into a shared internal representation, run retrieval pipelines on top of that representation, visualize retrieval traces in a browser, and execute experiments through a consistent interface.
 
-## 1. What You Get
+### Overview
 
-- `SimpleGraphContainer`: in-memory graph (nodes, edges, adjacency).
-- `SearchableGraphContainer`: `SimpleGraphContainer` + pluggable vector indexes.
-- Adapters:
-  - `import_graph_from_fastinsight(...)`
-  - `import_graph_from_lightrag(...)`
-- Live visualizer backend + web UI:
-  - `LiveGraphVisualizer`
-  - `serve_graph(...)`
-  - `serve_fastinsight(...)`
-  - `LiveVisualizerClient` (HTTP client for remote updates)
+The main idea behind GraphContainer is simple: different Graph-RAG methods store graph data in different formats, but once those graphs are converted into a common structure, they can be searched, visualized, and compared in a much more consistent way. In this repository, that common structure is implemented through the graph container layer, which stores nodes, edges, adjacency information, and vector indexes in a form that downstream components can access without caring about the original source format.
 
-## 2. Prerequisites
+At the core of the implementation are `SimpleGraphContainer` and `SearchableGraphContainer`. `SimpleGraphContainer` is responsible for holding the in-memory graph itself, while `SearchableGraphContainer` extends that base structure with pluggable vector indexes such as `node_vector`. On top of this container layer, the repository provides adapters for different upstream graph formats, including `import_graph_from_fastinsight`, `import_graph_from_lightrag`, and `import_graph_from_hipporag`. These adapters are the entry points that translate method-specific graph storage into the unified internal graph state used by the rest of the system.
 
-- Python `>= 3.11`
-- Install from project root:
+Once a graph has been loaded, retrieval is handled by the RAG modules under `src/rag`. The embedding path is managed through `src/rag/embeddings.py`, and the retrieval logic lives in `src/rag/retrievers.py`. The repository currently includes two retrieval strategies: `OneHopRetriever`, which starts from vector-retrieved seed nodes and expands to their immediate neighbors, and `FastInsightRetriever`, which applies a multi-stage retrieval process with seed selection, deeper exploration, and final filtering. In the current experiment setup, the initial retrieval size is set to `10`, and FastInsight keeps the final `5` nodes before answer generation.
+
+The end-to-end experiment pipeline is implemented in [test/rag_experiment.py](/./test/rag_experiment.py). This script loads the available graphs, applies the retrievers, builds prompts from the retrieved content, sends the prompts to the generator model, and writes the outputs as JSONL files. In other words, the implementation path is: load a graph from a method-specific source, convert it into the unified graph container, run retrieval on top of the shared representation, assemble the retrieved evidence into a prompt, generate an answer, and finally save the result for evaluation.
+
+### Installation
+
+Before running the project, make sure `uv` itself is installed. On macOS and Linux, you can install it with the official standalone installer:
 
 ```bash
-pip install -e .
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Optional packages for some adapter paths:
-- `python-dotenv`, `numpy`, `ijson` (mainly for LightRAG import behavior/performance)
+On Windows PowerShell, you can install it with:
 
-## 3. Basic Graph Usage
-
-```python
-from GraphContainer import SimpleGraphContainer, NodeRecord, EdgeRecord
-
-graph = SimpleGraphContainer()
-
-graph.add_node(NodeRecord(id="Doc:1", type="Document", text="A short document"))
-graph.add_node(NodeRecord(id="Entity:OpenAI", type="Entity"))
-graph.add_edge(
-    EdgeRecord(
-        source="Doc:1",
-        target="Entity:OpenAI",
-        relation="MENTIONS",
-        weight=1.0,
-    )
-)
-
-node = graph.get_node("Entity:OpenAI")
-neighbors = graph.get_neighbors("Doc:1")  # outgoing edges from Doc:1
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-## 4. Save / Load
+If you prefer another installation method, such as Homebrew, WinGet, Scoop, or `pipx`, you can use the official `uv` installation guide. Once `uv` is available in your shell, install the project dependencies with:
 
-```python
-from GraphContainer import SimpleGraphContainer
-
-graph = SimpleGraphContainer()
-# ... add nodes/edges ...
-graph.save("data/my_graph")  # creates data/my_graph_nodes.parquet and _edges.parquet
-
-loaded = SimpleGraphContainer()
-loaded.load("data/my_graph")
+```bash
+uv sync
 ```
 
-## 5. Import from Existing RAG Stores
+### Web-based Visualizer
 
-### FastInsight
+The web interface is powered by the live visualizer. You can launch it directly from the command line by pointing it to a graph source:
 
-```python
-from GraphContainer import import_graph_from_fastinsight
-
-graph = import_graph_from_fastinsight("data/rag_storage/scifact-bge-m3")
-print(graph.list_indexes())  # often includes node_vector and collection name
+```bash
+uv run python -m GraphContainer.visualizer.live_visualizer \
+  --source data/rag_storage/scifact-bge-m3 \
+  --host 127.0.0.1 \
+  --port 8765 \
+  --hops 2
 ```
 
-Expected files under source directory:
-- `nodes.jsonl`
-- `edges.jsonl`
-- optional `manifest.json`
+After the server starts, open `http://127.0.0.1:8765` in your browser. The page renders the graph or subgraph associated with the current retrieval session and lets you inspect how the retriever moved through the graph. Nodes and edges selected during retrieval can be highlighted, and the visualizer keeps track of session progress so that a query can be inspected step by step instead of only as a final result.
 
-### LightRAG
-
-```python
-from GraphContainer import import_graph_from_lightrag
-
-graph = import_graph_from_lightrag("path/to/lightrag/output")
-print(len(graph.nodes), len(graph.edges))
-```
-
-Expected files under source directory:
-- `vdb_entities.json`
-- `vdb_relationships.json`
-
-Useful environment variables for LightRAG import:
-- `LIGHTRAG_ATTACH_INDEX` (default: `true`)
-- `LIGHTRAG_LOAD_EMBEDDINGS` (default: `true`)
-- `LIGHTRAG_BATCH_SIZE` (default: `1000`)
-- `VECTOR_STORE_PATH` (default: `./data/database/chroma_db`)
-- `VECTOR_DISTANCE_METRIC` (default: `cosine`)
-
-## 6. SearchableGraphContainer Example
-
-```python
-from GraphContainer import SearchableGraphContainer, InMemoryVectorIndexer
-
-graph = SearchableGraphContainer()
-indexer = InMemoryVectorIndexer()
-graph.attach_index("node_vector", indexer)
-
-indexer.add(
-    "Doc:1",
-    {
-        "embedding": [0.1, 0.2, 0.3],
-        "document": "A short document",
-        "metadata": {"node_id": "Doc:1"},
-    },
-)
-
-hits = graph.search("node_vector", [0.1, 0.2, 0.3], k=3)
-print(hits)
-```
-
-## 7. Run the Live Visualizer
-
-### Option A: Serve an existing graph object
+If you already have a graph object in memory, you can launch the same interface from Python by using `serve_graph`:
 
 ```python
 from GraphContainer import serve_graph
@@ -135,10 +61,11 @@ visualizer = serve_graph(
     port=8765,
     default_hops=2,
 )
-print("Open:", visualizer.url)  # http://127.0.0.1:8765
+
+print(visualizer.url)
 ```
 
-### Option B: Serve directly from FastInsight storage
+If your graph is stored in FastInsight format, you can also serve it directly from storage:
 
 ```python
 from GraphContainer import serve_fastinsight
@@ -149,66 +76,32 @@ visualizer = serve_fastinsight(
     port=8765,
     default_hops=2,
 )
-print("Open:", visualizer.url)
 ```
 
-### Option C: CLI
+In practice, the web page is useful for understanding what happened during retrieval rather than only checking the final answer. A typical flow is to start the visualizer, open the browser page, submit a query or connect to an existing retrieval session, and then inspect the highlighted nodes, edges, and progress updates. This makes it easier to see which evidence was selected, how graph traversal expanded from the initial seeds, and how the retrieved subgraph contributed to the final answer.
+
+### Run Experiments
+
+The default experiment path in this repository is provided through [scripts/run_batch_experiment.sh](./scripts/run_batch_experiment.sh). This script is intentionally fixed to the current experimental setup and can be run with:
 
 ```bash
-python -m GraphContainer.visualizer.live_visualizer \
-  --source data/rag_storage/scifact-bge-m3 \
-  --host 127.0.0.1 \
-  --port 8765 \
-  --hops 2
+uv run bash scripts/run_batch_experiment.sh
 ```
 
-## 8. Update Highlights During Runtime
+By default, this runs the experiment on the `bsard` dataset with `query_limit=-1`, `top_k=10`, `index_name=node_vector`, `ollama_url=http://localhost:11434/v1`, `ollama_model=gemma3:12b`, and `max_context_chunks=10`. The current setup uses `text-embedding-3-small` for embeddings, and the experiment script iterates over the available graph imports while applying both retrieval methods to each graph.
 
-`LiveGraphVisualizer` supports session-based highlighting (useful for live retrieval/debugging).
+If you want to run the experiment entry point directly rather than going through the batch script, you can execute:
 
-```python
-session_id = visualizer.create_session({"query": "What is TopoRel?"})
-
-visualizer.update_session(
-    session_id,
-    nodes=[
-        {"id": "Entity:OpenAI", "style": {"color": {"background": "#ffd54f"}}},
-    ],
-    edges=[
-        ("Doc:1", "Entity:OpenAI", "MENTIONS"),
-    ],
-    progress={"current": 1, "total": 3, "message": "retrieving..."},
-)
+```bash
+uv run python test/rag_experiment.py \
+  --dataset bsard \
+  --query_limit -1 \
+  --top_k 10 \
+  --index_name node_vector \
+  --output_dir ./output/bsard \
+  --ollama_url http://localhost:11434/v1 \
+  --ollama_model gemma3:12b \
+  --max_context_chunks 10
 ```
 
-When done:
-
-```python
-visualizer.stop()
-```
-
-## 9. Control Sessions Remotely (HTTP Client)
-
-```python
-from GraphContainer import LiveVisualizerClient
-
-client = LiveVisualizerClient("http://127.0.0.1:8765")
-
-session_id = client.create_session({"query": "graph search demo"})
-client.set_progress(session_id, current=1, total=4, message="expanding neighbors")
-
-client.update_session(
-    session_id,
-    nodes=[{"id": "Entity:OpenAI"}],
-    edges=[{"source": "Doc:1", "target": "Entity:OpenAI", "relation": "MENTIONS"}],
-)
-
-subgraph = client.get_session_subgraph(session_id, hops=2)
-print(subgraph["highlighted"])
-```
-
-## 10. Notes
-
-- Highlighted node/edge IDs must exist in the base graph loaded in the visualizer.
-- `get_neighbors(node_id)` returns outgoing edges.
-- `PGVectorIndexer` exists as an interface but is not implemented yet.
+The outputs are saved as JSONL files under `./output/bsard/`, typically in files named like `<graph_name>_<retriever>.jsonl`. Each line contains a single query-output pair in the form `{"query": "question text", "output": "generated answer"}`. This makes the results easy to evaluate later with a separate judging or comparison pipeline.
