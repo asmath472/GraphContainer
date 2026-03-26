@@ -38,6 +38,8 @@ If you prefer another installation method, such as Homebrew, WinGet, Scoop, or `
 uv sync
 ```
 
+Also, you can get example graphs in this [Google Drive link](https://drive.google.com/file/d/1pK8mK2Jgp3T4gVUOuHQrVz2xSpDBIGdV/view?usp=sharing). Place this on the project root directory.
+
 ### Web-based Visualizer
 
 The web interface is powered by the live visualizer. You can launch it directly from the command line by pointing it to a graph source:
