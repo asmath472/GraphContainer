@@ -46,7 +46,7 @@ The web interface is powered by the live visualizer. You can launch it directly 
 
 ```bash
 uv run python -m GraphContainer.visualizer.live_visualizer \
-  --source data/rag_storage/scifact-bge-m3 \
+  --source data/rag_storage/fastinsight/scifact-openai \
   --host 127.0.0.1 \
   --port 8765 \
   --hops 2
@@ -75,7 +75,7 @@ If your graph is stored in FastInsight format, you can also serve it directly fr
 from GraphContainer import serve_fastinsight
 
 visualizer = serve_fastinsight(
-    "data/rag_storage/scifact-bge-m3",
+    "data/rag_storage/fastinsight/scifact-openai",
     host="127.0.0.1",
     port=8765,
     default_hops=2,
