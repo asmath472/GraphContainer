@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LEDGER_PATH = PROJECT_ROOT / "batch_jobs" / "judge_ledger.json"
-DEFAULT_RESULTS_DIR = PROJECT_ROOT / "output" / "judge_results"
+DEFAULT_RESULTS_DIR = PROJECT_ROOT / "outputs" / "judge_results"
 
 CRITERIA = ("Comprehensiveness", "Diversity", "Empowerment", "Overall Winner")
 
@@ -267,7 +267,7 @@ def collect_result_files(ledger: dict, results_dir: Path, explicit_files: List[s
     for info in ledger.values():
         if not isinstance(info, dict):
             continue
-        result_path = _safe_path(info.get("final_output_path"))
+        result_path = _safe_path(info.get("final_outputs_path"))
         metadata_path = _safe_path(info.get("metadata_path"))
         if result_path is None:
             continue
@@ -287,13 +287,13 @@ def collect_result_files(ledger: dict, results_dir: Path, explicit_files: List[s
             return []
         files = sorted(results_dir.glob("*_results.jsonl"))
 
-    outputs = []
+    result_files = []
     for p in files:
         if not p.exists():
             print(f"[skip] missing: {p}")
             continue
-        outputs.append((p, metadata_by_path.get(str(p), {})))
-    return outputs
+        result_files.append((p, metadata_by_path.get(str(p), {})))
+    return result_files
 
 
 def main() -> None:

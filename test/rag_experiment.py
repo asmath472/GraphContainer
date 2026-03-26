@@ -219,7 +219,7 @@ def main() -> None:
     parser.add_argument("--query_limit", type=int, default=-1)
     parser.add_argument("--top_k", type=int, default=10)
     parser.add_argument("--index_name", default="node_vector")
-    parser.add_argument("--output_dir", default="./output")
+    parser.add_argument("--outputs_dir", default="./outputs")
     parser.add_argument("--ollama_url", default="http://localhost:11434/v1")
     parser.add_argument("--ollama_model", default="gemma3:12b")
     parser.add_argument("--max_context_chunks", type=int, default=10)
@@ -252,11 +252,11 @@ def main() -> None:
     embedding_service = EmbeddingService(default_provider="openai", default_openai_model=EMBEDDING_MODEL)
     generator_client = OpenAI(base_url=args.ollama_url, api_key="ollama")
 
-    output_root_arg = Path(args.output_dir)
-    if output_root_arg.is_absolute():
-        output_root = output_root_arg
+    outputs_root_arg = Path(args.outputs_dir)
+    if outputs_root_arg.is_absolute():
+        output_root = outputs_root_arg
     else:
-        output_root = (PROJECT_ROOT / output_root_arg).resolve()
+        output_root = (PROJECT_ROOT / outputs_root_arg).resolve()
     output_root.mkdir(parents=True, exist_ok=True)
 
     graphs = get_graphs()
@@ -293,7 +293,7 @@ def main() -> None:
 
                 with output_path.open("w", encoding="utf-8") as f:
                     for _, query, answer in query_results:
-                        f.write(json.dumps({"query": query, "output": answer}, ensure_ascii=False) + "\n")
+                        f.write(json.dumps({"query": query, "outputs": answer}, ensure_ascii=False) + "\n")
         finally:
             if graph_name == "lightrag" and args.cleanup_lightrag_chroma:
                 cleanup_lightrag_chroma(graph_path_obj, graph, verbose=True)

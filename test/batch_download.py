@@ -55,9 +55,9 @@ def output_file_id(client: OpenAI, batch_id: str) -> str | None:
 def download_batch_output(
     client: OpenAI,
     batch_id: str,
-    final_output_path: Path,
-    force: bool,
-) -> bool:
+        final_outputs_path: Path,
+        force: bool,
+    ) -> bool:
     status = batch_status(client, batch_id)
     if status != "completed":
         print(f"[{batch_id}] status={status}, skip")
@@ -68,9 +68,9 @@ def download_batch_output(
         print(f"[{batch_id}] completed but no output_file_id")
         return False
 
-    final_output_path.parent.mkdir(parents=True, exist_ok=True)
-    if final_output_path.exists() and not force:
-        print(f"[{batch_id}] output already exists: {final_output_path}")
+    final_outputs_path.parent.mkdir(parents=True, exist_ok=True)
+    if final_outputs_path.exists() and not force:
+        print(f"[{batch_id}] output file already exists: {final_outputs_path}")
         return False
 
     response = client.files.content(out_file_id)
@@ -79,8 +79,8 @@ def download_batch_output(
         raw = getattr(response, "content", b"")
         content = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
 
-    final_output_path.write_text(content, encoding="utf-8")
-    print(f"[{batch_id}] downloaded -> {final_output_path}")
+    final_outputs_path.write_text(content, encoding="utf-8")
+    print(f"[{batch_id}] downloaded -> {final_outputs_path}")
     return True
 
 
@@ -174,10 +174,10 @@ def main() -> None:
         unique_ready.append(item)
 
     for entry in unique_ready:
-        final_path_raw = entry.payload.get("final_output_path")
+        final_path_raw = entry.payload.get("final_outputs_path")
         if not isinstance(final_path_raw, str) or not final_path_raw.strip():
             skipped += 1
-            print(f"[{entry.batch_id}] missing final_output_path, skip")
+            print(f"[{entry.batch_id}] missing final_outputs_path, skip")
             continue
 
         output_path = Path(final_path_raw)

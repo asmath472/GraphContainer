@@ -1,4 +1,4 @@
-"""Batch upload helper for six RAG output files in ``./output``.
+"""Batch upload helper for six RAG outputs files in ``./outputs``.
 
 Creates query-wise LLM-as-a-Judge batch jobs by comparing every pair of result
 files and generating OpenAI batch payloads (and optionally submits them).  For each
@@ -18,7 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LEDGER_PATH = PROJECT_ROOT / "batch_jobs" / "judge_ledger.json"
 PAIR_BATCH_DIR = PROJECT_ROOT / "batch_jobs" / "judge"
 PAIR_METADATA_DIR = PROJECT_ROOT / "batch_jobs" / "judge_metadata"
-OUTPUT_ROOT_DEFAULT = PROJECT_ROOT / "output"
+OUTPUT_ROOT_DEFAULT = PROJECT_ROOT / "outputs"
 
 
 def update_ledger(batch_id: str, info: dict) -> None:
@@ -46,11 +46,10 @@ def normalize_output(value):
 
 
 def parse_answer(record: dict) -> str:
-    for key in ("output", "llm_response", "answer", "response", "result", "text"):
-        if key in record and record[key] is not None:
-            text = normalize_output(record[key])
-            if text:
-                return text
+    if "outputs" in record and record["outputs"] is not None:
+        text = normalize_output(record["outputs"])
+        if text:
+            return text
 
     # Fallback: pick first non-empty string-like value.
     for value in record.values():
@@ -80,15 +79,15 @@ def load_output_file(path: Path) -> Dict[str, str]:
     return data
 
 
-def discover_output_files(output_dir: Path) -> List[Path]:
+def discover_outputs_files(outputs_dir: Path) -> List[Path]:
     candidates: List[Path] = []
-    for path in sorted(output_dir.glob("*.jsonl")):
+    for path in sorted(outputs_dir.glob("*.jsonl")):
         stem_parts = path.stem.split("_")
         if len(stem_parts) >= 2:
             candidates.append(path)
 
     if len(candidates) < 2:
-        raise FileNotFoundError(f"Need at least 2 jsonl files in {output_dir}")
+        raise FileNotFoundError(f"Need at least 2 jsonl files in {outputs_dir}")
     return candidates
 
 
@@ -155,7 +154,7 @@ def create_batch_input(
     metadata_dir.mkdir(parents=True, exist_ok=True)
     batch_input_path = batch_dir / f"judge_input_{pair_id}_{timestamp}.jsonl"
     metadata_path = metadata_dir / f"judge_metadata_{pair_id}_{timestamp}.jsonl"
-    final_output_path = PROJECT_ROOT / "output" / "judge_results" / f"{pair_id}_results.jsonl"
+    final_outputs_path = PROJECT_ROOT / "outputs" / "judge_results" / f"{pair_id}_results.jsonl"
 
     request_metadata: Dict[str, Dict[str, str]] = {}
     with batch_input_path.open("w", encoding="utf-8") as batch_file:
@@ -198,13 +197,13 @@ def create_batch_input(
             indent=2,
         )
 
-    return batch_input_path, metadata_path, final_output_path, len(pair_queries) * 2
+    return batch_input_path, metadata_path, final_outputs_path, len(pair_queries) * 2
 
 
 def submit_batch(
     batch_input_path: Path,
     metadata_path: Path,
-    final_output_path: Path,
+    final_outputs_path: Path,
     pair_id: str,
     model: str,
 ) -> str:
@@ -226,7 +225,7 @@ def submit_batch(
             "status": "submitted",
             "pair_id": pair_id,
             "metadata_path": str(metadata_path),
-            "final_output_path": str(final_output_path),
+            "final_outputs_path": str(final_outputs_path),
             "batch_id": batch_job.id,
             "created_at": int(time.time()),
         },
@@ -236,7 +235,7 @@ def submit_batch(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--output_dir", default=str(OUTPUT_ROOT_DEFAULT))
+    parser.add_argument("--outputs_dir", default=str(OUTPUT_ROOT_DEFAULT))
     parser.add_argument("--model", default="gpt-5-mini")
     parser.add_argument("--max_queries", type=int, default=-1)
     parser.add_argument(
@@ -246,19 +245,19 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    output_dir = Path(args.output_dir)
-    if not output_dir.is_absolute():
-        output_dir = (PROJECT_ROOT / output_dir).resolve()
-    if not output_dir.exists():
-        raise FileNotFoundError(f"Output dir not found: {output_dir}")
+    outputs_dir = Path(args.outputs_dir)
+    if not outputs_dir.is_absolute():
+        outputs_dir = (PROJECT_ROOT / outputs_dir).resolve()
+    if not outputs_dir.exists():
+        raise FileNotFoundError(f"Outputs dir not found: {outputs_dir}")
 
-    output_files = discover_output_files(output_dir)
+        outputs_files = discover_outputs_files(outputs_dir)
     results: List[Tuple[Path, Dict[str, str]]] = [
-        (path, load_output_file(path)) for path in output_files
+        (path, load_output_file(path)) for path in outputs_files
     ]
 
     if not results:
-        raise RuntimeError("No usable output files found.")
+        raise RuntimeError("No usable outputs data files found.")
 
     pair_count = 0
     total_requests = 0
@@ -267,7 +266,7 @@ def main() -> None:
         left_path, left_data = left
         right_path, right_data = right
         pair_id = build_pair_id(left_path, right_path)
-        batch_input_path, metadata_path, final_output_path, n_queries = create_batch_input(
+        batch_input_path, metadata_path, final_outputs_path, n_queries = create_batch_input(
             left_path,
             right_path,
             left_data,
@@ -282,17 +281,17 @@ def main() -> None:
         msg = f"[{pair_id}] common queries: {query_count}, batch requests: {n_queries}"
         if args.submit:
             batch_id = submit_batch(
-                batch_input_path,
-                metadata_path,
-                final_output_path,
-                pair_id,
-                args.model,
-            )
-            msg += f", batch_id={batch_id}"
+        batch_input_path,
+        metadata_path,
+        final_outputs_path,
+        pair_id,
+        args.model,
+        )
+        msg += f", batch_id={batch_id}"
         else:
             msg += ", status=draft"
 
-        msg += f"\n  batch_input: {batch_input_path}\n  metadata: {metadata_path}\n  expected_results: {final_output_path}"
+        msg += f"\n  batch_input: {batch_input_path}\n  metadata: {metadata_path}\n  expected_results: {final_outputs_path}"
         print(msg)
 
     print(f"\nGenerated {pair_count} pairwise batches with {total_requests} requests.")
