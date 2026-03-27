@@ -52,23 +52,29 @@ Also, you can get example graphs in the below Google Drive link. Place this on t
 
 ### Web-based Visualizer
 
-The web interface is powered by the live visualizer. You can launch it directly from the command line by pointing it to a graph source:
+The web interface is powered by the live visualizer. You can launch it directly from the command line by passing one or more `--graph FORMAT:PATH` arguments.
 
-<!-- ```bash
-uv run python -m GraphContainer.visualizer.live_visualizer \
-  --source data/rag_storage/fastinsight/scifact-openai \
-  --host 127.0.0.1 \
-  --port 8765 \
-  --hops 2
-``` -->
+The table below shows example commands for the four main graph formats:
+
+| Graph format | Example command |
+| --- | --- |
+| Component Graph | `python serve.py --graph component_graph:./data/rag_storage/fastinsight/scifact-openai` |
+| Attribute Bundle Graph | `python serve.py --graph attribute_bundle_graph:./data/rag_storage/lightrag/bsard` |
+| Topology-Semantic Graph | `python serve.py --graph topology_semantic_graph:./data/rag_storage/hipporag/2wikimultihopqa` |
+| Subgraph Union Graph | `python serve.py --graph subgraph_union_graph:./data/rag_storage/g_retriever/scene_graphs` |
+
+To serve all four formats at once, run:
 
 ```bash
-python serve.py --graph component_graph:./data/rag_storage/fastinsight/scifact-openai \
+python serve.py \
+  --graph component_graph:./data/rag_storage/fastinsight/scifact-openai \
+  --graph attribute_bundle_graph:./data/rag_storage/lightrag/bsard \
+  --graph topology_semantic_graph:./data/rag_storage/hipporag/2wikimultihopqa \
+  --graph subgraph_union_graph:./data/rag_storage/g_retriever/scene_graphs \
   --host 127.0.0.1 \
   --port 8765 \
   --hops 2
 ```
-
 
 After the server starts, open `http://127.0.0.1:8765` in your browser. The page renders the graph or subgraph associated with the current retrieval session and lets you inspect how the retriever moved through the graph. Nodes and edges selected during retrieval can be highlighted, and the visualizer keeps track of session progress so that a query can be inspected step by step instead of only as a final result.
 
