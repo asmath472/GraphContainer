@@ -12,7 +12,7 @@
 
 The main idea behind GraphContainer is simple: different graph RAG methods store graph data in different formats, but once those graphs are converted into a common structure, they can be searched, visualized, and compared in a much more consistent way. In this repository, that common structure is implemented through the Unified Graph State, which stores nodes, edges, adjacency information, and vector indexes in a form that downstream components can access without caring about the original source format.
 
-At the core of the implementation are `SimpleGraphContainer` and `SearchableGraphContainer`. `SimpleGraphContainer` is responsible for holding the in-memory graph itself, while `SearchableGraphContainer` extends that base structure with pluggable vector indexes such as `node_vector`. On top of this container layer, the repository provides adapters for different upstream graph formats, including `import_graph_from_fastinsight` (for Component Graph), `import_graph_from_lightrag` (for Attribute Bundle Graph), and `import_graph_from_hipporag` (for Topology-Semantic Graph). These adapters are the entry points that translate method-specific graph storage into the unified internal graph state used by the rest of the system.
+At the core of the implementation are `SimpleGraphContainer` and `SearchableGraphContainer`. `SimpleGraphContainer` is responsible for holding the in-memory graph itself, while `SearchableGraphContainer` extends that base structure with pluggable vector indexes such as `node_vector`. On top of this container layer, the repository provides adapters for different upstream graph formats, including `import_graph_from_component_graph` (Component Graph), `import_graph_from_attribute_bundle_graph` (Attribute Bundle Graph), `import_graph_from_topology_semantic_graph` (Topology-Semantic Graph), and `import_graph_from_subgraph_union_graph` (Subgraph Union Graph). These adapters are the entry points that translate method-specific graph storage into the unified internal graph state used by the rest of the system.
 
 Once a graph has been loaded, retrieval is handled by the RAG modules under `src/rag`. The embedding path is managed through `src/rag/embeddings.py`, and the retrieval logic lives in `src/rag/retrievers.py`. The repository currently includes two retrieval strategies: `OneHopRetriever`, which starts from vector-retrieved seed nodes and expands to their immediate neighbors, and `FastInsightRetriever`, which applies a multi-stage retrieval process with seed selection, deeper exploration, and final filtering. In the current experiment setup, the initial retrieval size is set to `10`, and FastInsight keeps the final `5` nodes before answer generation.
 
@@ -38,15 +38,39 @@ If you prefer another installation method, such as Homebrew, WinGet, Scoop, or `
 uv sync
 ```
 
-Also, you can get example graphs in this [Google Drive link](https://drive.google.com/file/d/1pK8mK2Jgp3T4gVUOuHQrVz2xSpDBIGdV/view?usp=sharing). Place this on the project root directory.
+After installation, restart bash and use the command below to activate the virtual environment.
+
+```bash
+source .venv/bin/activate
+```
+
+Also, you can get example graphs in the below Google Drive link. Place this on the project root directory.
+
+[![Google Drive Graph Data](https://img.shields.io/badge/Google%20Drive-Graph_Data-blue?style=for-the-badge&logo=googledrive&logoColor=white)](https://drive.google.com/file/d/1pK8mK2Jgp3T4gVUOuHQrVz2xSpDBIGdV/view?usp=sharing)
+
+<!-- [Google Drive link](https://drive.google.com/file/d/1pK8mK2Jgp3T4gVUOuHQrVz2xSpDBIGdV/view?usp=sharing). Place this on the project root directory. -->
 
 ### Web-based Visualizer
 
-The web interface is powered by the live visualizer. You can launch it directly from the command line by pointing it to a graph source:
+The web interface is powered by the live visualizer. You can launch it directly from the command line by passing one or more `--graph FORMAT:PATH` arguments.
+
+The table below shows example commands for the four main graph formats:
+
+| Graph format | Example command |
+| --- | --- |
+| Component Graph | `python serve.py --graph component_graph:./data/rag_storage/fastinsight/scifact-openai` |
+| Attribute Bundle Graph | `python serve.py --graph attribute_bundle_graph:./data/rag_storage/lightrag/bsard` |
+| Topology-Semantic Graph | `python serve.py --graph topology_semantic_graph:./data/rag_storage/hipporag/2wikimultihopqa` |
+| Subgraph Union Graph | `python serve.py --graph subgraph_union_graph:./data/rag_storage/g_retriever/scene_graphs` |
+
+To serve all four formats at once, run:
 
 ```bash
-uv run python -m GraphContainer.visualizer.live_visualizer \
-  --source data/rag_storage/fastinsight/scifact-openai \
+python serve.py \
+  --graph component_graph:./data/rag_storage/fastinsight/scifact-openai \
+  --graph attribute_bundle_graph:./data/rag_storage/lightrag/bsard \
+  --graph topology_semantic_graph:./data/rag_storage/hipporag/2wikimultihopqa \
+  --graph subgraph_union_graph:./data/rag_storage/g_retriever/scene_graphs \
   --host 127.0.0.1 \
   --port 8765 \
   --hops 2
@@ -69,12 +93,12 @@ visualizer = serve_graph(
 print(visualizer.url)
 ```
 
-If your graph is stored in FastInsight format, you can also serve it directly from storage:
+If your graph is stored in Component Graph format, you can also serve it directly from storage:
 
 ```python
-from GraphContainer import serve_fastinsight
+from GraphContainer import serve_component_graph
 
-visualizer = serve_fastinsight(
+visualizer = serve_component_graph(
     "data/rag_storage/fastinsight/scifact-openai",
     host="127.0.0.1",
     port=8765,

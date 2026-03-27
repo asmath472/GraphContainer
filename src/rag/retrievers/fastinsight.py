@@ -14,12 +14,28 @@ from .base import BaseRetriever
 from .utils import dedup_preserve_order, embed_query
 
 
-def _title_from_content(node: Dict[str, Any], construction_method: str = "fastinsight") -> str:
+_GRAPH_CONSTRUCTION_STYLE_ALIASES = {
+    "component": "component_graph",
+    "component_graph": "component_graph",
+    "fastinsight": "component_graph",
+    "attribute_bundle": "attribute_bundle_graph",
+    "attribute_bundle_graph": "attribute_bundle_graph",
+    "lightrag": "attribute_bundle_graph",
+}
+
+
+def _normalize_graph_construction_method(method: Any) -> str:
+    key = str(method or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return _GRAPH_CONSTRUCTION_STYLE_ALIASES.get(key, key)
+
+
+def _title_from_content(node: Dict[str, Any], construction_method: str = "component_graph") -> str:
     title = node.get("title")
     if isinstance(title, str) and title:
         return title
 
-    if construction_method == "lightrag":
+    construction_method = _normalize_graph_construction_method(construction_method)
+    if construction_method == "attribute_bundle_graph":
         content = str(node.get("content", ""))
         node["title"] = content.split("\n", 1)[0].strip()
     else:
@@ -108,6 +124,9 @@ def _vector_search(
     database_construction_method: str,
     search_kwargs: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
+    database_construction_method = _normalize_graph_construction_method(
+        database_construction_method
+    )
     query_list = [float(x) for x in query_vec]
     results = graph.search(index_name, query_list, k=top_k, **(search_kwargs or {}))
 
@@ -137,7 +156,7 @@ def _vector_search(
             "embedding": embedding,
         }
 
-        if database_construction_method == "lightrag":
+        if database_construction_method == "attribute_bundle_graph":
             row["title"] = row["content"].split("\n", 1)[0].strip()
         else:
             row["title"] = node_id
@@ -309,7 +328,7 @@ def _collecting_new(
     granker: _GRanker,
     gcn_filter: bool = False,
     gcn_alpha: float = 0.7,
-    database_construction_method: str = "fastinsight",
+    database_construction_method: str = "component_graph",
     stex_params: Optional[Dict[str, Any]] = None,
     session_id: Optional[str] = None,
     visualizer: Optional[Any] = None,
@@ -552,7 +571,9 @@ class FastInsightRetriever(BaseRetriever):
         seed_top_k = int(kwargs.pop("seed_top_k", 10))
         diving_top_k = int(kwargs.pop("diving_top_k", 100))
         final_top_k = int(kwargs.pop("final_top_k", 10))
-        database_construction_method = str(kwargs.pop("database_construction_method", "fastinsight"))
+        database_construction_method = _normalize_graph_construction_method(
+            kwargs.pop("database_construction_method", "component_graph")
+        )
         verbose = bool(kwargs.pop("verbose", False))
         gcn_filter = bool(kwargs.pop("gcn_filter", False))
         gcn_alpha = float(kwargs.pop("gcn_alpha", 0.7))

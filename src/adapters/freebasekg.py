@@ -78,7 +78,7 @@ class FreebaseKGAdapter(GraphAdapter):
         if mode == "path":
             raise UnsupportedSourceError(
                 "WebQSP adapter expects a Hugging Face dataset name (e.g. "
-                "'rmanluo/RoG-webqsp'). Use the g_retriever adapter for preprocessed "
+                "'rmanluo/RoG-webqsp'). Use the subgraph_union_graph adapter for preprocessed "
                 "nodes/edges CSVs."
             )
         if isinstance(resolved, str):

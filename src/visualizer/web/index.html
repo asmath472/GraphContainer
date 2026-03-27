@@ -125,7 +125,7 @@
                         <div id="chat-retrieval-warning" class="chat-retrieval-warning hidden" role="alert" aria-live="polite" aria-hidden="true">
                             <span class="chat-retrieval-warning-icon" aria-hidden="true">⚠</span>
                             <span id="chat-retrieval-warning-text">
-                                FastInsight requires a dense vector index (`node_vector`). Select another retrieval method or switch to a graph with a dense index.
+                                Component Graph requires a dense vector index (`node_vector`). Select another retrieval method or switch to a graph with a dense index.
                             </span>
                         </div>
                     </header>
@@ -162,10 +162,10 @@
                         <label for="import-adapter">Graph Type</label>
 
                         <select id="import-adapter" required>
-                            <option value="fastinsight" disabled>Component (blocked)</option>
-                            <option value="lightrag">Attribute Bundle</option>
-                            <option value="hipporag">Topology-Semantic</option>
-                            <option value="g_retriever">Subgraph Union</option>
+                            <option value="component_graph" disabled>Component Graph (blocked)</option>
+                            <option value="attribute_bundle_graph">Attribute Bundle Graph</option>
+                            <option value="topology_semantic_graph">Topology-Semantic Graph</option>
+                            <option value="subgraph_union_graph">Subgraph Union Graph</option>
                             <!-- <option value="expla_graphs">Triplet Sequence</option> -->
                         </select>
 

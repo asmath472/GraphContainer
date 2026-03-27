@@ -104,7 +104,7 @@ def build_prompt(query: str, context_chunks: Sequence[str], top_k: int = 10) -> 
 
 
 def cleanup_lightrag_chroma(graph_path: Path, graph: Any, *, verbose: bool = False) -> None:
-    """Release LightRAG-related vector store artifacts when using lightrag graph."""
+    """Release LightRAG-related vector store artifacts when using an Attribute Bundle Graph."""
     index = graph.get_index("node_vector")
     persist_path = getattr(index, "persist_path", None)
     if not persist_path:
@@ -151,7 +151,7 @@ def run_retrieval_and_generate(
     top_k: int,
     index_name: str,
     max_context_chunks: int,
-    fastinsight_db_style: str = "fastinsight",
+    graph_construction_style: str = "component_graph",
     fastinsight_extra: Optional[Dict[str, Any]] = None,
 ) -> str:
     retrieval_kwargs: Dict[str, Any] = {
@@ -169,7 +169,7 @@ def run_retrieval_and_generate(
                 "seed_top_k": top_k,
                 "diving_top_k": max(100, top_k),
                 "final_top_k": FASTINSIGHT_FINAL_TOP_K,
-                "database_construction_method": fastinsight_db_style,
+                "database_construction_method": graph_construction_style,
             }
         )
         if fastinsight_extra:
@@ -197,12 +197,20 @@ def run_retrieval_and_generate(
 def get_graphs() -> List[Tuple[str, str, Any]]:
     graph_specs = [
         (
-            "fastinsight",
+            "component_graph",
             "./data/rag_storage/fastinsight/bsard-openai",
             import_graph_from_fastinsight,
         ),
-        ("lightrag", "./data/rag_storage/lightrag/bsard", import_graph_from_lightrag),
-        ("hipporag", "./data/rag_storage/hipporag/bsard", import_graph_from_hipporag),
+        (
+            "attribute_bundle_graph",
+            "./data/rag_storage/lightrag/bsard",
+            import_graph_from_lightrag,
+        ),
+        (
+            "topology_semantic_graph",
+            "./data/rag_storage/hipporag/bsard",
+            import_graph_from_hipporag,
+        ),
     ]
     loaded_graphs: List[Tuple[str, str, Any]] = []
     for name, rel_path, loader in graph_specs:
@@ -266,7 +274,11 @@ def main() -> None:
             for method in ("one-hop", "fastinsight"):
                 output_path = output_root / f"{graph_name}_{method}.jsonl"
                 query_results: List[Tuple[int, str, str]] = []
-                db_style = "lightrag" if (method == "fastinsight" and graph_name == "lightrag") else "fastinsight"
+                graph_construction_style = (
+                    "attribute_bundle_graph"
+                    if (method == "fastinsight" and graph_name == "attribute_bundle_graph")
+                    else "component_graph"
+                )
                 retriever = OneHopRetriever() if method == "one-hop" else FastInsightRetriever()
 
                 for idx, query in enumerate(
@@ -285,7 +297,7 @@ def main() -> None:
                             top_k=args.top_k,
                             index_name=args.index_name,
                             max_context_chunks=args.max_context_chunks,
-                            fastinsight_db_style=db_style,
+                            graph_construction_style=graph_construction_style,
                         )
                     except Exception as exc:
                         answer = f"ERROR: {exc}"
@@ -295,7 +307,7 @@ def main() -> None:
                     for _, query, answer in query_results:
                         f.write(json.dumps({"query": query, "outputs": answer}, ensure_ascii=False) + "\n")
         finally:
-            if graph_name == "lightrag" and args.cleanup_lightrag_chroma:
+            if graph_name == "attribute_bundle_graph" and args.cleanup_lightrag_chroma:
                 cleanup_lightrag_chroma(graph_path_obj, graph, verbose=True)
 
 

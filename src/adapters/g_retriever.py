@@ -252,7 +252,7 @@ def _iter_graph_batches(
 
 class GRetrieverAdapter(GraphAdapter):
     def __init__(self):
-        super().__init__(name="g_retriever", version="0.1.0")
+        super().__init__(name="subgraph_union_graph", version="0.1.0")
 
     def can_import(self, source: Any) -> bool:
         try:
@@ -418,7 +418,7 @@ class GRetrieverAdapter(GraphAdapter):
                         metadata["original_node_ids"] = [f"{gid}:{local_id}"]
                         if keep_source_reference:
                             metadata.setdefault("_source_path", str(src_path))
-                            metadata.setdefault("_source_style", "g_retriever")
+                            metadata.setdefault("_source_style", "subgraph_union_graph")
 
                         graph.add_node(
                             NodeRecord(
@@ -493,7 +493,7 @@ class GRetrieverAdapter(GraphAdapter):
                     metadata["original_edge_ids"] = [f"{gid}:{src_local}->{tgt_local}"]
                     if keep_source_reference:
                         metadata.setdefault("_source_path", str(src_path))
-                        metadata.setdefault("_source_style", "g_retriever")
+                        metadata.setdefault("_source_style", "subgraph_union_graph")
 
                     graph.add_edge(
                         EdgeRecord(

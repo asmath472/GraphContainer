@@ -200,7 +200,7 @@ class HippoRAGAdapter(GraphAdapter):
     """
 
     def __init__(self):
-        super().__init__(name="hipporag", version="2.0.0")
+        super().__init__(name="topology_semantic_graph", version="2.0.0")
 
     def can_import(self, source: Any) -> bool:
         try:
@@ -396,7 +396,7 @@ class HippoRAGAdapter(GraphAdapter):
                 metadata: Dict[str, Any] = {"hash_id": node_id, "node_type": "Entity"}
                 if keep_source_reference:
                     metadata["_source_path"] = str(src)
-                    metadata["_source_style"] = "hipporag"
+                    metadata["_source_style"] = "topology_semantic_graph"
                 emb_val = emb if load_embeddings else None
                 graph.add_node(
                     NodeRecord(
@@ -438,7 +438,7 @@ class HippoRAGAdapter(GraphAdapter):
                 metadata: Dict[str, Any] = {"hash_id": node_id, "node_type": "Chunk"}
                 if keep_source_reference:
                     metadata["_source_path"] = str(src)
-                    metadata["_source_style"] = "hipporag"
+                    metadata["_source_style"] = "topology_semantic_graph"
                 emb_val = emb if load_embeddings else None
                 graph.add_node(
                     NodeRecord(
@@ -485,7 +485,7 @@ class HippoRAGAdapter(GraphAdapter):
                     }
                     if keep_source_reference:
                         metadata["_source_path"] = str(src)
-                        metadata["_source_style"] = "hipporag"
+                        metadata["_source_style"] = "topology_semantic_graph"
                     graph.add_node(
                         NodeRecord(
                             id=entity_id,
@@ -574,7 +574,7 @@ class HippoRAGAdapter(GraphAdapter):
                     }
                     if keep_source_reference:
                         metadata["_source_path"] = str(src)
-                        metadata["_source_style"] = "hipporag"
+                        metadata["_source_style"] = "topology_semantic_graph"
                     graph.add_node(
                         NodeRecord(
                             id=source_id,
@@ -593,7 +593,7 @@ class HippoRAGAdapter(GraphAdapter):
                     }
                     if keep_source_reference:
                         metadata["_source_path"] = str(src)
-                        metadata["_source_style"] = "hipporag"
+                        metadata["_source_style"] = "topology_semantic_graph"
                     graph.add_node(
                         NodeRecord(
                             id=target_id,
@@ -650,7 +650,7 @@ class HippoRAGAdapter(GraphAdapter):
                     metadata = {"hash_id": vid}
                     if keep_source_reference:
                         metadata["_source_path"] = str(src)
-                        metadata["_source_style"] = "hipporag"
+                        metadata["_source_style"] = "topology_semantic_graph"
                     graph.add_node(
                         NodeRecord(
                             id=vid,

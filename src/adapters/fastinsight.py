@@ -51,7 +51,7 @@ def _parse_edge(raw: Dict[str, Any]) -> Optional[Tuple[str, str]]:
 
 class FastInsightAdapter(GraphAdapter):
     def __init__(self):
-        super().__init__(name="fastinsight", version="0.1.0")
+        super().__init__(name="component_graph", version="0.1.0")
 
     def can_import(self, source: Any) -> bool:
         try:
@@ -93,7 +93,7 @@ class FastInsightAdapter(GraphAdapter):
             metadata = {k: v for k, v in raw.items() if k not in {"id", "text", "type"}}
             if keep_source_reference:
                 metadata.setdefault("_source_path", str(src_path))
-                metadata.setdefault("_source_style", "fastinsight")
+                metadata.setdefault("_source_style", "component_graph")
             graph.add_node(
                 NodeRecord(
                     id=str(node_id),
