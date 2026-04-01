@@ -14,7 +14,7 @@ The main idea behind GraphContainer is simple: different graph RAG methods store
 
 At the core of the implementation are `SimpleGraphContainer` and `SearchableGraphContainer`. `SimpleGraphContainer` is responsible for holding the in-memory graph itself, while `SearchableGraphContainer` extends that base structure with pluggable vector indexes such as `node_vector`. On top of this container layer, the repository provides adapters for different upstream graph formats, including `import_graph_from_component_graph` (Component Graph), `import_graph_from_attribute_bundle_graph` (Attribute Bundle Graph), `import_graph_from_topology_semantic_graph` (Topology-Semantic Graph), and `import_graph_from_subgraph_union_graph` (Subgraph Union Graph). These adapters are the entry points that translate method-specific graph storage into the unified internal graph state used by the rest of the system.
 
-Once a graph has been loaded, retrieval is handled by the RAG modules under `src/rag`. The embedding path is managed through `src/rag/embeddings.py`, and the retrieval logic lives in `src/rag/retrievers.py`. The repository currently includes two retrieval strategies: `OneHopRetriever`, which starts from vector-retrieved seed nodes and expands to their immediate neighbors, and `FastInsightRetriever`, which applies a multi-stage retrieval process with seed selection, deeper exploration, and final filtering. In the current experiment setup, the initial retrieval size is set to `10`, and FastInsight keeps the final `5` nodes before answer generation.
+Once a graph has been loaded, retrieval is handled by the RAG modules under `src/graphcontainer/rag`. The embedding path is managed through `src/graphcontainer/rag/embeddings.py`, and the retrieval logic lives in `src/graphcontainer/rag/retrievers.py`. The repository currently includes two retrieval strategies: `OneHopRetriever`, which starts from vector-retrieved seed nodes and expands to their immediate neighbors, and `FastInsightRetriever`, which applies a multi-stage retrieval process with seed selection, deeper exploration, and final filtering. In the current experiment setup, the initial retrieval size is set to `10`, and FastInsight keeps the final `5` nodes before answer generation.
 
 The end-to-end experiment pipeline is implemented in [test/rag_experiment.py](/./test/rag_experiment.py). This script loads the available graphs, applies the retrievers, builds prompts from the retrieved content, sends the prompts to the generator model, and writes the outputs as JSONL files. In other words, the implementation path is: load a graph from a method-specific source, convert it into the unified graph container, run retrieval on top of the shared representation, assemble the retrieved evidence into a prompt, generate an answer, and finally save the result for evaluation.
 
@@ -32,7 +32,15 @@ On Windows PowerShell, you can install it with:
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
-If you prefer another installation method, such as Homebrew, WinGet, Scoop, or `pipx`, you can use the official `uv` installation guide. Once `uv` is available in your shell, install the project dependencies with:
+If you prefer another installation method, such as Homebrew, WinGet, Scoop, or `pipx`, you can use the official `uv` installation guide.
+
+If you want to install the published package from PyPI, use:
+
+```bash
+pip install graphcontainer
+```
+
+If you are developing locally from this repository, install the project dependencies with:
 
 ```bash
 uv sync
@@ -81,7 +89,7 @@ After the server starts, open `http://127.0.0.1:8765` in your browser. The page 
 If you already have a graph object in memory, you can launch the same interface from Python by using `serve_graph`:
 
 ```python
-from GraphContainer import serve_graph
+from graphcontainer import serve_graph
 
 visualizer = serve_graph(
     graph,
@@ -96,7 +104,7 @@ print(visualizer.url)
 If your graph is stored in Component Graph format, you can also serve it directly from storage:
 
 ```python
-from GraphContainer import serve_component_graph
+from graphcontainer import serve_component_graph
 
 visualizer = serve_component_graph(
     "data/rag_storage/fastinsight/scifact-openai",

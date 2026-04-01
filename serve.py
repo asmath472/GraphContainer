@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
 Entrypoint script for GraphContainer live visualizer.
-Use this instead of `python -m src.visualizer.live_visualizer`
+Use this instead of `python -m graphcontainer.visualizer.live_visualizer`
 to avoid the module double-import issue.
 
 Usage examples:
@@ -22,6 +22,14 @@ Usage examples:
   python serve.py --graph component_graph:./data/rag_storage/fastinsight/scifact-bge-m3  --graph attribute_bundle_graph:./data/rag_storage/lightrag/bsard  --graph topology_semantic_graph:./data/rag_storage/hipporag/2wikimultihopqa/gpt-4o-mini_nvidia_NV-Embed-v2  --graph subgraph_union_graph:./data/rag_storage/g_retriever/expla_graphs
   python serve.py --graph expla_graphs:./data/rag_storage/g_retriever/expla_graphs
 """
-from src.visualizer.live_visualizer import _main
+from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+SRC_ROOT = PROJECT_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from graphcontainer.visualizer.live_visualizer import _main
 
 _main()

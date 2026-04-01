@@ -11,14 +11,15 @@ from tqdm import tqdm
 from openai import OpenAI
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+SRC_ROOT = PROJECT_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
-from src.adapters.fastinsight import import_graph_from_fastinsight
-from src.adapters.hipporag import import_graph_from_hipporag
-from src.adapters.lightrag import import_graph_from_lightrag
-from src.rag.embeddings import EmbeddingService
-from src.rag.retrievers import FastInsightRetriever, OneHopRetriever
+from graphcontainer.adapters.fastinsight import import_graph_from_fastinsight
+from graphcontainer.adapters.hipporag import import_graph_from_hipporag
+from graphcontainer.adapters.lightrag import import_graph_from_lightrag
+from graphcontainer.rag.embeddings import EmbeddingService
+from graphcontainer.rag.retrievers import FastInsightRetriever, OneHopRetriever
 
 
 SYSTEM_PROMPT = """You are a graph RAG assistant. Answer strictly using the provided context."""

@@ -1,9 +1,17 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "graphcontainer"
 version = "0.1.0"
-description = "Add your description here"
+description = "Unified workflow for working with graph RAG systems"
 readme = "README.md"
 requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [
+    { name = "asmath472" },
+]
 dependencies = [
     "chromadb>=1.4.1",
     "flagembedding>=1.3.5",
@@ -20,3 +28,15 @@ dependencies = [
     "transformers>=4.57.6",
     "ollama>=0.6.1",
 ]
+
+[tool.setuptools]
+include-package-data = true
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["graphcontainer*"]
+exclude = ["test*"]
+
+[tool.setuptools.package-data]
+graphcontainer = ["visualizer/web/*"]
