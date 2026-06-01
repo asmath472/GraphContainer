@@ -51,6 +51,7 @@
                         <div id="debug-replay-status">No replay snapshots</div>
                     </div>
                 </div>
+
             </div>
 
             <div id="sidepanel">
@@ -108,24 +109,45 @@
                                 style="padding: 6px 8px; min-width: 128px;">
                                 <option value="gpt-5-nano">Model: gpt-5-nano</option>
                             </select>
-                            <select id="chat-embedding-select" aria-label="Select Embedding Model"
-                                style="padding: 6px 8px; min-width: 148px;">
-                                <option value="bge:BAAI/bge-m3">Embedding: BAAI/bge-m3</option>
-                                <option value="openai:text-embedding-3-small">Embedding: OpenAI text-embedding-3-small
-                                </option>
-                            </select>
+                            <div class="embedding-select-wrap">
+                                <select id="chat-embedding-select" aria-label="Select Embedding Model"
+                                    style="padding: 6px 8px; min-width: 148px;">
+                                    <option value="bge:BAAI/bge-m3">Embedding: BAAI/bge-m3</option>
+                                    <option value="openai:text-embedding-3-small">Embedding: OpenAI text-embedding-3-small
+                                    </option>
+                                </select>
+                                <button id="hf-search-btn" type="button" class="hf-search-btn"
+                                    title="Search HuggingFace for embedding models" aria-label="Search HuggingFace models">🔍</button>
+                            </div>
                             <select id="chat-retrieval-select" aria-label="Select Retrieval Method"
                                 style="padding: 6px 8px; min-width: 122px;">
                                 <option value="vector">RAG: Vector</option>
                                 <option value="one-hop">RAG: One-Hop</option>
                                 <!-- <option value="hybrid">RAG: Hybrid</option> -->
                                 <option value="fastinsight">RAG: FastInsight</option>
+                                <option value="gar">RAG: GAR</option>
                             </select>
+                        </div>
+
+                        <!-- HuggingFace Model Search Modal -->
+                        <div id="hf-search-modal" class="hf-search-modal hidden" role="dialog" aria-modal="true" aria-label="Search HuggingFace Embedding Models">
+                            <div class="hf-search-modal-backdrop" id="hf-search-backdrop"></div>
+                            <div class="hf-search-modal-card">
+                                <div class="hf-search-modal-header">
+                                    <h3>🤗 Search HuggingFace Embedding Models</h3>
+                                    <button id="hf-search-close" type="button" class="hf-search-close" aria-label="Close">&times;</button>
+                                </div>
+                                <div class="hf-search-input-wrap">
+                                    <input id="hf-search-input" type="text" placeholder="Search models (e.g., bge, gte, e5, multilingual...)" autocomplete="off" />
+                                </div>
+                                <div id="hf-search-status" class="hf-search-status">Type a keyword to search HuggingFace Hub</div>
+                                <div id="hf-search-results" class="hf-search-results"></div>
+                            </div>
                         </div>
                         <div id="chat-retrieval-warning" class="chat-retrieval-warning hidden" role="alert" aria-live="polite" aria-hidden="true">
                             <span class="chat-retrieval-warning-icon" aria-hidden="true">⚠</span>
                             <span id="chat-retrieval-warning-text">
-                                Component Graph requires a dense vector index (`node_vector`). Select another retrieval method or switch to a graph with a dense index.
+                                FastInsight and GAR require a dense vector index (`node_vector`). Select another retrieval method or switch to a graph with a dense index.
                             </span>
                         </div>
                     </header>

@@ -246,16 +246,26 @@ class LightRAGAdapter(GraphAdapter):
                 embeddings = [None] * len(raw_batch)
 
             for raw, embedding in zip(raw_batch, embeddings):
-                node_id = raw.get("id") or raw.get("__id__")
-                if node_id is None:
+                raw_id = raw.get("id") or raw.get("__id__")
+                if raw_id is None:
                     continue
-                node_id = str(node_id)
+                raw_id = str(raw_id)
+
+                # In LightRAG's vdb_entities.json the node IDs are hashed
+                # (e.g. "ent-xxxx"), but relationship src_id / tgt_id fields
+                # store the *plain entity name*.  Use entity_name as the
+                # canonical graph node ID so that edges connect properly;
+                # keep the original hash in metadata for reference.
+                entity_name = raw.get("entity_name") or raw.get("name")
+                node_id = str(entity_name).strip() if entity_name else raw_id
 
                 metadata = {
                     k: v
                     for k, v in raw.items()
                     if k not in {"id", "__id__", "content", "vector", "__vector__", "embedding"}
                 }
+                # Always preserve the original hashed ID
+                metadata.setdefault("ent_id", raw_id)
 
                 node = NodeRecord(
                     id=node_id,

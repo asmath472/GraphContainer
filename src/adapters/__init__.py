@@ -6,11 +6,13 @@ from .freebasekg import FreebaseKGAdapter, import_graph_from_freebasekg
 from .g_retriever import GRetrieverAdapter, import_graph_from_g_retriever
 from .lightrag import LightRAGAdapter, import_graph_from_lightrag
 from .hipporag import HippoRAGAdapter, import_graph_from_hipporag
+from .webqsp import WebQSPAdapter, import_graph_from_webqsp
 
 import_graph_from_component_graph = import_graph_from_fastinsight
 import_graph_from_attribute_bundle_graph = import_graph_from_lightrag
 import_graph_from_topology_semantic_graph = import_graph_from_hipporag
 import_graph_from_subgraph_union_graph = import_graph_from_g_retriever
+import_graph_from_webqsp_graph = import_graph_from_webqsp
 
 __all__ = [
     "GraphAdapter",
@@ -22,14 +24,17 @@ __all__ = [
     "GRetrieverAdapter",
     "LightRAGAdapter",
     "HippoRAGAdapter",
+    "WebQSPAdapter",
     "import_graph_from_component_graph",
     "import_graph_from_attribute_bundle_graph",
     "import_graph_from_topology_semantic_graph",
     "import_graph_from_subgraph_union_graph",
+    "import_graph_from_webqsp_graph",
     "import_graph_from_fastinsight",
     "import_graph_from_expla_graphs",
     "import_graph_from_freebasekg",
     "import_graph_from_lightrag",
     "import_graph_from_hipporag",
     "import_graph_from_g_retriever",
+    "import_graph_from_webqsp",
 ]

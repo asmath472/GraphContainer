@@ -288,7 +288,7 @@
     if (!node || typeof node !== "object") return false;
     const color = node.color;
     const hasOverlayColor = Boolean(color && typeof color === "object" && color.background);
-    const hasOverlayBorder = typeof node.borderWidth === "number" && node.borderWidth >= 3;
+    const hasOverlayBorder = typeof node.borderWidth === "number" && node.borderWidth > 3;
     return hasOverlayColor || hasOverlayBorder;
   }
 
@@ -1268,7 +1268,7 @@
     ).trim();
     const capability = graphCapabilitiesByName.get(graphName) || null;
     const shouldWarn =
-      retrieval === "fastinsight" &&
+      (retrieval === "fastinsight" || retrieval === "gar") &&
       (!capability || !capability.hasNodeVectorIndex);
 
     if (!shouldWarn) {
@@ -1278,7 +1278,7 @@
     }
 
     chatRetrievalWarningText.textContent =
-      "Component Graph requires a dense vector index (`node_vector`). This graph does not provide one. Choose One-Hop/Vector, or switch to a graph with a dense index.";
+      "FastInsight and GAR require a dense vector index (`node_vector`). This graph does not provide one. Choose One-Hop/Vector, or switch to a graph with a dense index.";
     chatRetrievalWarning.classList.remove("hidden");
     chatRetrievalWarning.setAttribute("aria-hidden", "false");
   }
@@ -2230,8 +2230,254 @@
     };
   }
 
+  // ═══════════════════════════════════════════════════════════════════
+  // HuggingFace Embedding Model Search
+  // ═══════════════════════════════════════════════════════════════════
+
+  function initHfSearch() {
+    const hfModal = document.getElementById("hf-search-modal");
+    const hfBackdrop = document.getElementById("hf-search-backdrop");
+    const hfCloseBtn = document.getElementById("hf-search-close");
+    const hfSearchBtn = document.getElementById("hf-search-btn");
+    const hfInput = document.getElementById("hf-search-input");
+    const hfStatus = document.getElementById("hf-search-status");
+    const hfResults = document.getElementById("hf-search-results");
+
+    if (!hfModal || !hfSearchBtn || !hfInput || !hfResults) return;
+
+    let hfDebounceTimer = null;
+    let hfAbortController = null;
+    const addedModelValues = new Set();
+
+    // Collect already-present models from the dropdown
+    function syncAddedModels() {
+      addedModelValues.clear();
+      if (!chatEmbeddingSelect) return;
+      for (const opt of chatEmbeddingSelect.options) {
+        addedModelValues.add(String(opt.value || "").trim());
+      }
+    }
+
+    function openHfModal() {
+      syncAddedModels();
+      hfModal.classList.remove("hidden");
+      hfInput.value = "";
+      hfResults.replaceChildren();
+      if (hfStatus) hfStatus.textContent = "Type a keyword to search HuggingFace Hub";
+      requestAnimationFrame(() => hfInput.focus());
+    }
+
+    function closeHfModal() {
+      hfModal.classList.add("hidden");
+      if (hfDebounceTimer) {
+        clearTimeout(hfDebounceTimer);
+        hfDebounceTimer = null;
+      }
+      if (hfAbortController) {
+        hfAbortController.abort();
+        hfAbortController = null;
+      }
+    }
+
+    hfSearchBtn.onclick = openHfModal;
+    if (hfCloseBtn) hfCloseBtn.onclick = closeHfModal;
+    if (hfBackdrop) hfBackdrop.onclick = closeHfModal;
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !hfModal.classList.contains("hidden")) {
+        e.preventDefault();
+        closeHfModal();
+      }
+    });
+
+    function formatDownloads(count) {
+      const n = Number(count) || 0;
+      if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+      if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+      return String(n);
+    }
+
+    function renderResults(models) {
+      hfResults.replaceChildren();
+
+      if (!Array.isArray(models) || !models.length) {
+        if (hfStatus) hfStatus.textContent = "No embedding models found for this query";
+        return;
+      }
+
+      if (hfStatus) hfStatus.textContent = `Found ${models.length} model${models.length !== 1 ? "s" : ""}`;
+
+      for (const model of models) {
+        const modelId = String(model.id || "").trim();
+        if (!modelId) continue;
+
+        const item = document.createElement("div");
+        item.className = "hf-result-item";
+
+        const info = document.createElement("div");
+        info.className = "hf-result-info";
+
+        const nameEl = document.createElement("div");
+        nameEl.className = "hf-result-name";
+        nameEl.textContent = modelId;
+
+        const meta = document.createElement("div");
+        meta.className = "hf-result-meta";
+
+        const dlItem = document.createElement("span");
+        dlItem.className = "hf-result-meta-item";
+        dlItem.textContent = `\u2B07 ${formatDownloads(model.downloads)}`;
+
+        const likesItem = document.createElement("span");
+        likesItem.className = "hf-result-meta-item";
+        likesItem.textContent = `\u2764 ${model.likes || 0}`;
+
+        const tagItem = document.createElement("span");
+        tagItem.className = "hf-result-meta-item";
+        tagItem.textContent = model.pipeline_tag || "embedding";
+
+        meta.appendChild(dlItem);
+        meta.appendChild(likesItem);
+        meta.appendChild(tagItem);
+
+        info.appendChild(nameEl);
+        info.appendChild(meta);
+
+        const addBtn = document.createElement("button");
+        addBtn.type = "button";
+        addBtn.className = "hf-result-add-btn";
+
+        const hfValue = `hf:${modelId}`;
+        const isAlreadyAdded = addedModelValues.has(hfValue);
+
+        if (isAlreadyAdded) {
+          addBtn.textContent = "\u2713 Added";
+          addBtn.classList.add("added");
+          item.classList.add("added");
+        } else {
+          addBtn.textContent = "+ Add";
+          addBtn.onclick = () => addModelToDropdown(modelId, addBtn, item);
+        }
+
+        item.appendChild(info);
+        item.appendChild(addBtn);
+        hfResults.appendChild(item);
+      }
+    }
+
+    async function addModelToDropdown(modelId, addBtn, itemEl) {
+      addBtn.textContent = "Adding...";
+      addBtn.disabled = true;
+
+      try {
+        const res = await fetch("/api/embedding/add", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: modelId, provider: "hf" }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.error || "Failed to add model");
+        }
+
+        // Update the embedding dropdown with the new catalog
+        if (data.embedding_catalog) {
+          applyEmbeddingCatalog(data.embedding_catalog);
+        } else if (chatEmbeddingSelect) {
+          // Fallback: manually add the option
+          const value = data.value || `hf:${modelId}`;
+          const label = data.label || `Embedding: hf/${modelId}`;
+          const exists = Array.from(chatEmbeddingSelect.options).some(
+            (opt) => opt.value === value
+          );
+          if (!exists) {
+            const opt = document.createElement("option");
+            opt.value = value;
+            opt.textContent = label;
+            chatEmbeddingSelect.appendChild(opt);
+          }
+        }
+
+        // Select the newly added model
+        const newValue = data.value || `hf:${modelId}`;
+        if (chatEmbeddingSelect) {
+          chatEmbeddingSelect.value = newValue;
+          updateActiveChatSetting("embedding", newValue);
+        }
+
+        addedModelValues.add(newValue);
+        addBtn.textContent = "\u2713 Added";
+        addBtn.classList.add("added");
+        addBtn.onclick = null;
+        if (itemEl) itemEl.classList.add("added");
+      } catch (err) {
+        addBtn.textContent = "Error";
+        addBtn.disabled = false;
+        setTimeout(() => {
+          addBtn.textContent = "+ Add";
+          addBtn.disabled = false;
+          addBtn.onclick = () => addModelToDropdown(modelId, addBtn, itemEl);
+        }, 1500);
+      }
+    }
+
+    async function doSearch(query) {
+      const trimmed = String(query || "").trim();
+      if (!trimmed) {
+        hfResults.replaceChildren();
+        if (hfStatus) hfStatus.textContent = "Type a keyword to search HuggingFace Hub";
+        return;
+      }
+
+      if (hfAbortController) {
+        hfAbortController.abort();
+      }
+      hfAbortController = new AbortController();
+
+      const spinnerSpan = document.createElement("span");
+      spinnerSpan.className = "hf-search-spinner";
+      if (hfStatus) {
+        hfStatus.replaceChildren();
+        hfStatus.appendChild(spinnerSpan);
+        hfStatus.appendChild(document.createTextNode(` Searching "${trimmed}"...`));
+      }
+
+      try {
+        const res = await fetch(
+          `/api/hf/models/search?q=${encodeURIComponent(trimmed)}&limit=12`,
+          { signal: hfAbortController.signal }
+        );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.error || "Search failed");
+        }
+        syncAddedModels();
+        renderResults(data.models || []);
+      } catch (err) {
+        if (err.name === "AbortError") return;
+        if (hfStatus) hfStatus.textContent = `Search error: ${err.message}`;
+      }
+    }
+
+    hfInput.addEventListener("input", () => {
+      if (hfDebounceTimer) clearTimeout(hfDebounceTimer);
+      hfDebounceTimer = setTimeout(() => {
+        doSearch(hfInput.value);
+      }, 400);
+    });
+
+    hfInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (hfDebounceTimer) clearTimeout(hfDebounceTimer);
+        doSearch(hfInput.value);
+      }
+    });
+  }
+
   initTheme();
   initChatUi();
+  initHfSearch();
   setPhysicsEnabled(true);
   clearGraph();
   syncReplayControls("");
