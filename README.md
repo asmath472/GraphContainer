@@ -6,7 +6,7 @@
 
 **GraphContainer** provides a unified workflow for working with graph RAG systems. It is designed to load graphs produced by different methods, convert them into a shared internal representation, run retrieval pipelines on top of that representation, visualize retrieval traces in a browser, and execute experiments through a consistent interface.
 
-[![YouTube Demo](https://img.shields.io/badge/YouTube-Demo-red?style=for-the-badge&logo=youtube&logoColor=white)](https://youtu.be/O02eNJLwkU0) [![Google Drive Paper pdf](https://img.shields.io/badge/Google%20Drive-Graph_Data-blue?style=for-the-badge&logo=googledrive&logoColor=white)](https://drive.google.com/file/d/1gQmZs97i0rtqEO67kjsBxq9t45waWO84/view)
+[![YouTube Demo](https://img.shields.io/badge/YouTube-Demo-red?style=for-the-badge&logo=youtube&logoColor=white)](https://youtu.be/O02eNJLwkU0) [![Paper pdf](https://img.shields.io/badge/Google%20Drive-PDF-blue?style=for-the-badge&logo=googledrive&logoColor=white)](https://drive.google.com/file/d/1gQmZs97i0rtqEO67kjsBxq9t45waWO84/view)
 
 
 ### Overview
