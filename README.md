@@ -6,8 +6,10 @@
 
 **GraphContainer** provides a unified workflow for working with graph RAG systems. It is designed to load graphs produced by different methods, convert them into a shared internal representation, run retrieval pipelines on top of that representation, visualize retrieval traces in a browser, and execute experiments through a consistent interface.
 
-[![YouTube Demo](https://img.shields.io/badge/YouTube-Demo-red?style=for-the-badge&logo=youtube&logoColor=white)](https://youtu.be/O02eNJLwkU0) [![Paper pdf](https://img.shields.io/badge/Google%20Drive-PDF-blue?style=for-the-badge&logo=googledrive&logoColor=white)](https://drive.google.com/file/d/1gQmZs97i0rtqEO67kjsBxq9t45waWO84/view)
-
+[![YouTube Demo](https://img.shields.io/badge/YouTube-Demo-red?style=for-the-badge&logo=youtube&logoColor=white)](https://youtu.be/O02eNJLwkU0)
+[![arXiv](https://img.shields.io/badge/arXiv-2607.19362-b31b1b?style=for-the-badge&logo=arxiv&logoColor=white)](https://arxiv.org/abs/2607.19362)
+[![Hugging Face Paper](https://img.shields.io/badge/Hugging%20Face-Paper-yellow?style=for-the-badge)](https://huggingface.co/papers/2607.19362)
+[![Graph Artifacts](https://img.shields.io/badge/Hugging%20Face-Graph%20Dataset-yellow?style=for-the-badge)](https://huggingface.co/datasets/hchaejeong/graphcontainer-graphs)
 
 ### Overview
 
@@ -17,7 +19,7 @@ At the core of the implementation are `SimpleGraphContainer` and `SearchableGrap
 
 Once a graph has been loaded, retrieval is handled by the RAG modules under `src/rag`. The embedding path is managed through `src/rag/embeddings.py`, and the retrieval logic lives in `src/rag/retrievers.py`. The repository currently includes two retrieval strategies: `OneHopRetriever`, which starts from vector-retrieved seed nodes and expands to their immediate neighbors, and `FastInsightRetriever`, which applies a multi-stage retrieval process with seed selection, deeper exploration, and final filtering. In the current experiment setup, the initial retrieval size is set to `10`, and FastInsight keeps the final `5` nodes before answer generation.
 
-The end-to-end experiment pipeline is implemented in [test/rag_experiment.py](/./test/rag_experiment.py). This script loads the available graphs, applies the retrievers, builds prompts from the retrieved content, sends the prompts to the generator model, and writes the outputs as JSONL files. In other words, the implementation path is: load a graph from a method-specific source, convert it into the unified graph container, run retrieval on top of the shared representation, assemble the retrieved evidence into a prompt, generate an answer, and finally save the result for evaluation.
+The end-to-end experiment pipeline is implemented in [test/rag_experiment.py](./test/rag_experiment.py). This script loads the available graphs, applies the retrievers, builds prompts from the retrieved content, sends the prompts to the generator model, and writes the outputs as JSONL files. In other words, the implementation path is: load a graph from a method-specific source, convert it into the unified graph container, run retrieval on top of the shared representation, assemble the retrieved evidence into a prompt, generate an answer, and finally save the result for evaluation.
 
 ### Installation
 
@@ -45,11 +47,76 @@ After installation, restart bash and use the command below to activate the virtu
 source .venv/bin/activate
 ```
 
-Also, you can get example graphs in the below Google Drive link. Place this on the project root directory.
+### Download Preconstructed Graph Artifacts
 
-[![Google Drive Graph Data](https://img.shields.io/badge/Google%20Drive-Graph_Data-blue?style=for-the-badge&logo=googledrive&logoColor=white)](https://drive.google.com/file/d/1pK8mK2Jgp3T4gVUOuHQrVz2xSpDBIGdV/view?usp=sharing)
+Preconstructed graph artifacts are distributed through the Hugging Face dataset repository at https://huggingface.co/datasets/hchaejeong/graphcontainer-graphs. The stored graph artifacts are about 10.1 GB total. The G-Retriever SceneGraphs artifact is stored as tar archives to avoid uploading more than 160k small files; extracting it requires additional temporary disk space roughly comparable to the extracted artifact size.
 
-<!-- [Google Drive link](https://drive.google.com/file/d/1pK8mK2Jgp3T4gVUOuHQrVz2xSpDBIGdV/view?usp=sharing). Place this on the project root directory. -->
+Install the Hugging Face Hub client if needed:
+
+```bash
+uv pip install -U huggingface_hub
+```
+
+Run this from the GraphContainer repository root:
+
+```python
+from huggingface_hub import snapshot_download
+
+snapshot_download(
+    repo_id="hchaejeong/graphcontainer-graphs",
+    repo_type="dataset",
+    local_dir="./data/rag_storage",
+    allow_patterns=[
+        "fastinsight/**",
+        "g_retriever/**",
+        "hipporag/**",
+        "lightrag/**",
+    ],
+)
+```
+
+The `allow_patterns` list downloads only the graph artifact directories, so `README.md` and `manifest.jsonl` from the Hugging Face repository are not placed under `data/rag_storage`.
+
+Expected layout:
+
+```text
+data/rag_storage/
+├── fastinsight/
+│   └── scifact-bge-m3/
+├── g_retriever/
+│   └── scene_graphs/
+├── hipporag/
+│   └── 2wikimultihopqa/
+└── lightrag/
+    └── bsard/
+```
+
+To download only one artifact, narrow the `allow_patterns` value. For example:
+
+```python
+from huggingface_hub import snapshot_download
+
+snapshot_download(
+    repo_id="hchaejeong/graphcontainer-graphs",
+    repo_type="dataset",
+    local_dir="./data/rag_storage",
+    allow_patterns=["hipporag/2wikimultihopqa/**"],
+)
+```
+
+Before using the Subgraph Union Graph example, extract the G-Retriever tar archives:
+
+```bash
+cd ./data/rag_storage/g_retriever/scene_graphs
+
+tar -xf nodes.tar
+tar -xf edges.tar
+tar -xf graphs.tar
+
+cd ../../../..
+```
+
+After confirming extraction succeeded, you may optionally remove `nodes.tar`, `edges.tar`, and `graphs.tar` to reclaim disk space.
 
 ### Web-based Visualizer
 
@@ -59,7 +126,7 @@ The table below shows example commands for the four main graph formats:
 
 | Graph format | Example command |
 | --- | --- |
-| Component Graph | `python serve.py --graph component_graph:./data/rag_storage/fastinsight/scifact-openai` |
+| Component Graph | `python serve.py --graph component_graph:./data/rag_storage/fastinsight/scifact-bge-m3` |
 | Attribute Bundle Graph | `python serve.py --graph attribute_bundle_graph:./data/rag_storage/lightrag/bsard` |
 | Topology-Semantic Graph | `python serve.py --graph topology_semantic_graph:./data/rag_storage/hipporag/2wikimultihopqa` |
 | Subgraph Union Graph | `python serve.py --graph subgraph_union_graph:./data/rag_storage/g_retriever/scene_graphs` |
@@ -68,7 +135,7 @@ To serve all four formats at once, run:
 
 ```bash
 python serve.py \
-  --graph component_graph:./data/rag_storage/fastinsight/scifact-openai \
+  --graph component_graph:./data/rag_storage/fastinsight/scifact-bge-m3 \
   --graph attribute_bundle_graph:./data/rag_storage/lightrag/bsard \
   --graph topology_semantic_graph:./data/rag_storage/hipporag/2wikimultihopqa \
   --graph subgraph_union_graph:./data/rag_storage/g_retriever/scene_graphs \
@@ -76,6 +143,8 @@ python serve.py \
   --port 8765 \
   --hops 2
 ```
+
+`subgraph_union_graph` expects extracted `nodes/`, `edges/`, and `graphs/` directories, so extract the G-Retriever tar archives before launching that format.
 
 After the server starts, open `http://127.0.0.1:8765` in your browser. The page renders the graph or subgraph associated with the current retrieval session and lets you inspect how the retriever moved through the graph. Nodes and edges selected during retrieval can be highlighted, and the visualizer keeps track of session progress so that a query can be inspected step by step instead of only as a final result.
 
@@ -100,7 +169,7 @@ If your graph is stored in Component Graph format, you can also serve it directl
 from GraphContainer import serve_component_graph
 
 visualizer = serve_component_graph(
-    "data/rag_storage/fastinsight/scifact-openai",
+    "data/rag_storage/fastinsight/scifact-bge-m3",
     host="127.0.0.1",
     port=8765,
     default_hops=2,
@@ -117,7 +186,7 @@ The default experiment path in this repository is provided through [scripts/run_
 uv run bash scripts/run_batch_experiment.sh
 ```
 
-By default, this runs the experiment on the `bsard` dataset with `query_limit=-1`, `top_k=10`, `index_name=node_vector`, `ollama_url=http://localhost:11434/v1`, `ollama_model=gemma3:12b`, and `max_context_chunks=10`. The current setup uses `text-embedding-3-small` for embeddings, and the experiment script iterates over the available graph imports while applying both retrieval methods to each graph.
+By default, this runs the experiment on the `bsard` dataset with `query_limit=-1`, `top_k=10`, `index_name=node_vector`, `ollama_url=http://localhost:11434/v1`, `ollama_model=gemma3:12b`, and `max_context_chunks=10`. The current setup uses `text-embedding-3-small` for embeddings, and the experiment script iterates over the configured graph imports while applying both retrieval methods to each graph.
 
 If you want to run the experiment entry point directly rather than going through the batch script, you can execute:
 
@@ -127,10 +196,44 @@ uv run python test/rag_experiment.py \
   --query_limit -1 \
   --top_k 10 \
   --index_name node_vector \
-  --output_dir ./output/bsard \
+  --outputs_dir ./outputs/bsard \
   --ollama_url http://localhost:11434/v1 \
   --ollama_model gemma3:12b \
   --max_context_chunks 10
 ```
 
-The outputs are saved as JSONL files under `./output/bsard/`, typically in files named like `<graph_name>_<retriever>.jsonl`. Each line contains a single query-output pair in the form `{"query": "question text", "output": "generated answer"}`. This makes the results easy to evaluate later with a separate judging or comparison pipeline.
+The outputs are saved as JSONL files under `./outputs/bsard/`, typically in files named like `<graph_name>_<retriever>.jsonl`. Each line contains a single query-output pair in the form `{"query": "question text", "outputs": "generated answer"}`. This makes the results easy to evaluate later with a separate judging or comparison pipeline.
+
+### Verifying Downloaded Artifacts
+
+After downloading the Hugging Face artifacts, you can run a local smoke test:
+
+```bash
+uv run python scripts/verify_hf_artifacts.py --root ./data/rag_storage
+```
+
+The default check verifies required artifact paths and adapter-compatible storage layouts. To run full importer loads, use:
+
+```bash
+uv run python scripts/verify_hf_artifacts.py --root ./data/rag_storage --full-import
+```
+
+`--full-import` can take many minutes for large LightRAG and G-Retriever artifacts. The script exits with a non-zero status if a required artifact is missing or a selected importer check fails.
+
+### Data Provenance And Licensing
+
+GraphContainer source code is released under the MIT License in this GitHub repository.
+
+The graph artifacts on Hugging Face are derived from multiple upstream datasets and graph construction systems. The MIT License for this source code does not automatically apply to every source dataset or derived graph artifact. Artifact-specific provenance and license notes are tracked in [DATA_LICENSES.md](./DATA_LICENSES.md) and summarized in the Hugging Face Dataset Card.
+
+### Citation
+
+```bibtex
+@misc{an2026graphcontainer,
+  title        = {GraphContainer: A Unified Platform for Comparing and Debugging Graph RAG Methods},
+  author       = {Seonho An and Chaejeong Hyun and Min-Soo Kim},
+  year         = {2026},
+  eprint       = {2607.19362},
+  archivePrefix = {arXiv}
+}
+```

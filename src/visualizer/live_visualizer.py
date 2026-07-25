@@ -6,6 +6,7 @@ import json
 import mimetypes
 import cgi
 import os
+import re
 import shutil
 import threading
 import time
@@ -16,9 +17,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tempfile import mkdtemp
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 
 from ..core import SimpleGraphContainer
+from .oracle import OracleResolver
 
 
 _GRAPH_FORMAT_ALIASES: Dict[str, str] = {
@@ -140,6 +144,7 @@ class LiveGraphVisualizer:
         self._server: Optional[ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
         self._chat_service: Optional[Any] = None
+        self._oracle: Optional[OracleResolver] = None
 
         self._adj_undirected: Dict[str, Set[str]] = {}
         self._incident_edges: Dict[str, List[int]] = {}
@@ -160,6 +165,7 @@ class LiveGraphVisualizer:
         *,
         label: str = "",
         graph_type: str = "",
+        source_path: str = "",
     ) -> None:
         """Register a named graph. The first registered graph becomes active."""
         with self._lock:
@@ -168,6 +174,7 @@ class LiveGraphVisualizer:
                 "label": label or name,
                 "container": container,
                 "graph_type": normalized_graph_type or graph_type or "",
+                "source_path": str(source_path) if source_path else "",
             }
             if not self._active_graph_name:
                 self._active_graph_name = name
@@ -213,7 +220,119 @@ class LiveGraphVisualizer:
                 raise KeyError(f"Unknown graph: {name!r}. Available: {list(self._graphs.keys())}")
             self._active_graph_name = name
             self._chat_service = None  # force re-creation with new graph
+            self._oracle = None        # reset oracle since style may change
             self._build_topology_indexes()
+
+    @property
+    def oracle(self) -> Optional[OracleResolver]:
+        with self._lock:
+            if self._oracle is None and self._active_graph_name:
+                # Attempt to auto-initialize the oracle using source_path
+                graph_info = self._graphs[self._active_graph_name]
+                source_path = graph_info.get("source_path", "")
+                if source_path:
+                    try:
+                        print(f"[DEBUG] Auto-loading oracle for {graph_info['graph_type']} at {source_path}")
+                        self._auto_load_oracle(graph_info["graph_type"], source_path)
+                    except Exception as e:
+                        print(f"[DEBUG] Oracle auto-load failed: {e}")
+            return self._oracle
+
+    def _auto_load_oracle(self, style: str, source_path: str) -> None:
+        from pathlib import Path
+        path_obj = Path(source_path)
+        
+        style_map = {
+            "component_graph": "fastinsight",
+            "attribute_bundle_graph": "lightrag",
+            "topology_semantic_graph": "hipporag",
+            "subgraph_union_graph": "g_retriever",
+            "expla_graphs": "g_retriever",
+            "webqsp": "g_retriever",
+        }
+        oracle_style = style_map.get(style, "")
+        if not oracle_style: return
+
+        if oracle_style == "g_retriever":
+            dataset_dir = source_path
+        elif oracle_style == "hipporag":
+            dataset_dir = str(Path("/mnt/disk2/cjhyun/InfoRAG/data/datasets") / path_obj.parent.name)
+        else:
+            dataset_dir = str(Path("/mnt/disk2/cjhyun/InfoRAG/data/datasets") / path_obj.name.split('-')[0])
+            
+        print(f"[DEBUG] Setting oracle dataset_dir={dataset_dir}")
+        self.set_oracle(
+            dataset_dir=dataset_dir,
+            rag_storage_dir=source_path,
+            hipporag_outputs_dir=source_path,
+        )
+        self._build_oracle_label_map_locked()
+
+    def _build_oracle_label_map_locked(self) -> None:
+        if not self._active_graph_name: return
+        graph_info = self._graphs[self._active_graph_name]
+        container = graph_info["container"]
+        
+        label_map = {}
+        for nid, node in container.nodes.items():
+            snid = str(nid)
+            label_map[snid.lower()] = snid
+            
+            # Map by node.text if available (crucial for HippoRAG where text=entity_name)
+            if node.text:
+                label_map[str(node.text).lower()] = snid
+                
+            ent_name = node.metadata.get("entity_name")
+            if ent_name:
+                label_map[str(ent_name).lower()] = snid
+            orig_label = node.metadata.get("original_label")
+            if orig_label:
+                label_map[str(orig_label).lower()] = snid
+        
+        graph_info["oracle_label_map"] = label_map
+        print(f"[DEBUG] Cached oracle label map with {len(label_map)} entries for {self._active_graph_name}")
+
+    def get_oracle_label_map(self) -> Dict[str, str]:
+        with self._lock:
+            if not self._active_graph_name: return {}
+            graph_info = self._graphs[self._active_graph_name]
+            if "oracle_label_map" not in graph_info:
+                self._build_oracle_label_map_locked()
+            return graph_info.get("oracle_label_map", {})
+
+    def set_oracle(
+        self,
+        dataset_dir: str,
+        rag_storage_dir: Optional[str] = None,
+        hipporag_outputs_dir: Optional[str] = None,
+    ) -> OracleResolver:
+        """Initialize the OracleResolver using the active graph's style."""
+        with self._lock:
+            if not self._active_graph_name:
+                raise RuntimeError("No active graph to determine oracle style.")
+            
+            graph_info = self._graphs[self._active_graph_name]
+            style = graph_info.get("graph_type", "")
+            # Mapping generic graph types back to oracle styles
+            style_map = {
+                "component_graph": "fastinsight",
+                "attribute_bundle_graph": "lightrag",
+                "topology_semantic_graph": "hipporag",
+                "subgraph_union_graph": "g_retriever",
+                "expla_graphs": "g_retriever",
+                "webqsp": "g_retriever",
+            }
+            oracle_style = style_map.get(style, "")
+            if not oracle_style:
+                raise ValueError(f"Graph type '{style}' does not support oracle visualization.")
+
+            self._oracle = OracleResolver(
+                style=oracle_style,
+                dataset_dir=dataset_dir,
+                rag_storage_dir=rag_storage_dir,
+                hipporag_outputs_dir=hipporag_outputs_dir,
+            )
+            return self._oracle
 
     # ------------------------------------------------------------------
 
@@ -839,15 +958,23 @@ class LiveGraphVisualizer:
                     return
 
                 if path == "/api/config":
-                    self._write_json(
-                        {
-                            "poll_interval_ms": visualizer.poll_interval_ms,
-                            "default_hops": visualizer.default_hops,
-                            "chat_enabled": True,
-                            "default_chat_retrieval": "one-hop",
-                            "graphs": visualizer.list_graphs(),
-                        }
-                    )
+                    embedding_catalog = None
+                    try:
+                        svc = visualizer._ensure_chat_service()
+                        if hasattr(svc, "list_embedding_options"):
+                            embedding_catalog = svc.list_embedding_options()
+                    except Exception:
+                        pass
+                    config_payload: Dict[str, Any] = {
+                        "poll_interval_ms": visualizer.poll_interval_ms,
+                        "default_hops": visualizer.default_hops,
+                        "chat_enabled": True,
+                        "default_chat_retrieval": "one-hop",
+                        "graphs": visualizer.list_graphs(),
+                    }
+                    if embedding_catalog is not None:
+                        config_payload["embedding_catalog"] = embedding_catalog
+                    self._write_json(config_payload)
                     return
 
                 if path == "/api/graphs":
@@ -856,6 +983,31 @@ class LiveGraphVisualizer:
 
                 if path == "/api/sessions":
                     self._write_json({"sessions": visualizer.list_sessions()})
+                    return
+
+                if path == "/api/oracle":
+                    oracle = visualizer.oracle
+                    if oracle is None:
+                        self._write_json({"loaded": False})
+                    else:
+                        self._write_json(oracle.status())
+                    return
+
+                # ── Hugging Face model search ────────────────────────────
+                if path == "/api/hf/models/search":
+                    raw_query = (query.get("q") or [""])[0].strip()
+                    if not raw_query:
+                        self._write_json({"error": "query parameter 'q' is required"}, status=400)
+                        return
+                    try:
+                        limit = min(20, max(1, int((query.get("limit") or ["12"])[0])))
+                    except (TypeError, ValueError):
+                        limit = 12
+                    try:
+                        results = _search_hf_embedding_models(raw_query, limit=limit)
+                        self._write_json({"ok": True, "query": raw_query, "models": results})
+                    except Exception as exc:
+                        self._write_json({"error": str(exc)}, status=502)
                     return
 
                 prefix = "/api/session/"
@@ -1097,7 +1249,7 @@ class LiveGraphVisualizer:
                                 visualizer._graphs, label or adapter_key
                             )
                             visualizer.register_graph(
-                                name, graph, label=label, graph_type=adapter_key
+                                name, graph, label=label, graph_type=adapter_key, source_path=str(source_path)
                             )
                             visualizer.switch_graph(name)
 
@@ -1155,6 +1307,26 @@ class LiveGraphVisualizer:
                     self._write_json({"ok": True, **result})
                     return
 
+                if path == "/api/oracle":
+                    dataset_dir = payload.get("dataset_dir")
+                    if not dataset_dir:
+                        self._write_json({"error": "dataset_dir is required"}, status=400)
+                        return
+
+                    rag_storage_dir = payload.get("rag_storage_dir")
+                    hipporag_outputs_dir = payload.get("hipporag_outputs_dir")
+
+                    try:
+                        oracle = visualizer.set_oracle(
+                            dataset_dir=str(dataset_dir),
+                            rag_storage_dir=str(rag_storage_dir) if rag_storage_dir else None,
+                            hipporag_outputs_dir=str(hipporag_outputs_dir) if hipporag_outputs_dir else None,
+                        )
+                        self._write_json({"ok": True, **oracle.status()})
+                    except Exception as exc:
+                        self._write_json({"error": str(exc)}, status=400)
+                    return
+
                 if path == "/api/graph/switch":
                     name = payload.get("name")
                     if not name or not isinstance(name, str):
@@ -1172,6 +1344,42 @@ class LiveGraphVisualizer:
                             "graphs": visualizer.list_graphs(),
                         }
                     )
+                    return
+
+                # ── Add custom embedding model ───────────────────────────
+                if path == "/api/embedding/add":
+                    model_id = str(payload.get("model") or "").strip()
+                    provider = str(payload.get("provider") or "hf").strip().lower()
+                    if not model_id:
+                        self._write_json({"error": "'model' is required"}, status=400)
+                        return
+                    # Validate model_id: allow org/name, alphanumeric, hyphens, underscores, dots, slashes
+                    if not re.match(r'^[A-Za-z0-9_./-]+$', model_id):
+                        self._write_json({"error": "Invalid model identifier"}, status=400)
+                        return
+                    try:
+                        svc = visualizer._ensure_chat_service()
+                        embedding_service = getattr(svc.pipeline, "embedding_service", None)
+                        if embedding_service is not None:
+                            catalog = embedding_service._catalog
+                            canonical_provider = embedding_service._canonical_provider(provider)
+                            if canonical_provider not in catalog:
+                                catalog[canonical_provider] = []
+                            if model_id not in catalog[canonical_provider]:
+                                catalog[canonical_provider].append(model_id)
+                        updated_catalog = svc.list_embedding_options() if hasattr(svc, "list_embedding_options") else None
+                        self._write_json(
+                            {
+                                "ok": True,
+                                "provider": provider,
+                                "model": model_id,
+                                "value": f"{provider}:{model_id}",
+                                "label": f"Embedding: {provider}/{model_id}",
+                                "embedding_catalog": updated_catalog,
+                            }
+                        )
+                    except Exception as exc:
+                        self._write_json({"error": str(exc)}, status=400)
                     return
 
                 prefix = "/api/session/"
@@ -1285,6 +1493,7 @@ def serve_graph(
     name: str = "default",
     label: str = "",
     graph_type: str = "",
+    source_path: str = "",
     host: str = "127.0.0.1",
     port: int = 8765,
     poll_interval_ms: int = 600,
@@ -1304,12 +1513,12 @@ def serve_graph(
             default_hops=default_hops,
         )
         visualizer.register_graph(
-            name, container, label=label or name, graph_type=graph_type or name
+            name, container, label=label or name, graph_type=graph_type or name, source_path=source_path
         )
         visualizer.start()
     else:
         _visualizer.register_graph(
-            name, container, label=label or name, graph_type=graph_type or name
+            name, container, label=label or name, graph_type=graph_type or name, source_path=source_path
         )
         visualizer = _visualizer
     return visualizer
@@ -1333,6 +1542,7 @@ def serve_fastinsight(
         name=name,
         label=label,
         graph_type="component_graph",
+        source_path=str(source_path),
         host=host,
         port=port,
         poll_interval_ms=poll_interval_ms,
@@ -1388,6 +1598,7 @@ def serve_lightrag(
             name=name,
             label=label,
             graph_type="attribute_bundle_graph",
+            source_path=str(source_path),
             host=host,
             port=port,
             poll_interval_ms=poll_interval_ms,
@@ -1401,6 +1612,7 @@ def serve_lightrag(
         name=name,
         label=label,
         graph_type="attribute_bundle_graph",
+        source_path=str(source_path),
         host=host,
         port=port,
         poll_interval_ms=poll_interval_ms,
@@ -1415,6 +1627,7 @@ def serve_lightrag(
             graph,
             label=label,
             graph_type="attribute_bundle_graph",
+            source_path=str(source_path),
         )
 
     threading.Thread(target=_load_graph, daemon=True).start()
@@ -1466,6 +1679,7 @@ def serve_hipporag(
         name=name,
         label=label,
         graph_type="topology_semantic_graph",
+        source_path=str(source_path),
         host=host,
         port=port,
         poll_interval_ms=poll_interval_ms,
@@ -1518,6 +1732,7 @@ def serve_g_retriever(
         name=name,
         label=label,
         graph_type="subgraph_union_graph",
+        source_path=str(source_path),
         host=host,
         port=port,
         poll_interval_ms=poll_interval_ms,
@@ -1566,6 +1781,33 @@ def serve_expla_graphs(
         name=name,
         label=label,
         graph_type="expla_graphs",
+        source_path=str(source_path),
+        host=host,
+        port=port,
+        poll_interval_ms=poll_interval_ms,
+        default_hops=default_hops,
+    )
+
+def serve_webqsp(
+    source_path: Union[str, Path],
+    *,
+    name: str = "webqsp",
+    label: str = "WebQSP",
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    poll_interval_ms: int = 600,
+    default_hops: int = 1,
+) -> LiveGraphVisualizer:
+    """Serve a WebQSP graph."""
+    from ..adapters.webqsp import import_graph_from_webqsp
+
+    graph = import_graph_from_webqsp(source_path)
+    return serve_graph(
+        graph,
+        name=name,
+        label=label,
+        graph_type="webqsp",
+        source_path=str(source_path),
         host=host,
         port=port,
         poll_interval_ms=poll_interval_ms,
@@ -1591,6 +1833,7 @@ def serve_freebasekg(
         name=name,
         label=label,
         graph_type="freebasekg",
+        source_path=str(source_path),
         host=host,
         port=port,
         poll_interval_ms=poll_interval_ms,
@@ -1615,11 +1858,61 @@ def serve_tog(
         name=name,
         label=label,
         graph_type="tog",
+        source_path=str(source_path),
         host=host,
         port=port,
         poll_interval_ms=poll_interval_ms,
         default_hops=default_hops,
     )
+
+
+def _search_hf_embedding_models(query: str, *, limit: int = 12) -> List[Dict[str, Any]]:
+    """Search HuggingFace Hub for embedding-related models.
+
+    Queries the public HF Hub API twice (sentence-similarity then
+    feature-extraction) and merges results, deduplicating by model id.
+    """
+    safe_query = quote(query.strip(), safe="")
+    results_by_id: Dict[str, Dict[str, Any]] = {}
+
+    for pipeline_tag in ("sentence-similarity", "feature-extraction"):
+        url = (
+            f"https://huggingface.co/api/models"
+            f"?search={safe_query}"
+            f"&pipeline_tag={pipeline_tag}"
+            f"&sort=downloads"
+            f"&direction=-1"
+            f"&limit={limit}"
+        )
+        req = Request(url, headers={"Accept": "application/json"})
+        try:
+            with urlopen(req, timeout=8) as resp:
+                raw = resp.read().decode("utf-8")
+                models = json.loads(raw)
+        except (HTTPError, URLError, json.JSONDecodeError, OSError):
+            continue
+
+        if not isinstance(models, list):
+            continue
+
+        for model in models:
+            if not isinstance(model, dict):
+                continue
+            model_id = str(model.get("modelId") or model.get("id") or "").strip()
+            if not model_id:
+                continue
+            if model_id in results_by_id:
+                continue
+            results_by_id[model_id] = {
+                "id": model_id,
+                "downloads": model.get("downloads", 0),
+                "likes": model.get("likes", 0),
+                "pipeline_tag": model.get("pipeline_tag", ""),
+            }
+
+    # Sort by downloads descending, return up to limit
+    sorted_results = sorted(results_by_id.values(), key=lambda m: m.get("downloads", 0), reverse=True)
+    return sorted_results[:limit]
 
 
 _ADAPTER_IMPORTERS: Dict[str, str] = {
@@ -1629,6 +1922,7 @@ _ADAPTER_IMPORTERS: Dict[str, str] = {
     "subgraph_union_graph": "..adapters.g_retriever.import_graph_from_g_retriever",
     "expla_graphs": "..adapters.expla_graphs.import_graph_from_expla_graphs",
     "freebasekg": "..adapters.freebasekg.import_graph_from_freebasekg",
+    "webqsp": "..adapters.webqsp.import_graph_from_webqsp",
 }
 
 _ADAPTER_DEFAULT_LABELS: Dict[str, str] = {
@@ -1637,6 +1931,7 @@ _ADAPTER_DEFAULT_LABELS: Dict[str, str] = {
     "topology_semantic_graph": "Topology-Semantic Graph",
     "subgraph_union_graph": "Subgraph Union Graph",
     "expla_graphs": "Triplet Sequence Graph",
+    "webqsp": "WebQSP Knowledge Graph",
 }
 
 
@@ -1850,14 +2145,19 @@ def serve_multi(
             module_path, fn_name = importer_path.rsplit(".", 1)
             mod = importlib.import_module(module_path, package=__name__.rsplit(".", 1)[0])
             import_fn = getattr(mod, fn_name)
-            container = import_fn(source_path, **(extra_kwargs or {}))
+            
+            try:
+                container = import_fn(source_path, **(extra_kwargs or {}))
+            except Exception as e:
+                print(f"[ERROR] Failed to load graph '{name}' from {source_path}: {e}")
+                continue
         else:
             # Assume it's already a SimpleGraphContainer
             container = spec
             label = name
             adapter_key = ""
 
-        visualizer.register_graph(name, container, label=label, graph_type=adapter_key)
+        visualizer.register_graph(name, container, label=label, graph_type=adapter_key, source_path=str(source_path))
 
     if not visualizer._graphs:
         raise ValueError("No graphs were registered. Pass at least one entry in 'graphs'.")
@@ -1943,6 +2243,7 @@ def _main() -> None:
         "expla_graphs": serve_expla_graphs,
         "freebasekg": serve_freebasekg,
         "tog": serve_tog,
+        "webqsp": serve_webqsp,
     }
 
     common_kwargs: Dict[str, Any] = {
